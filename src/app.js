@@ -3,7 +3,7 @@ import { escapeHtml as esc, downloadFile, downloadDocx, createSeatMapSvg, openPr
 import { getDemoPlan, requestAgentPlan } from './agent.js';
 
 const STORE = 'zhixing-workbench-v1';
-const DEFAULT_ENDPOINT = 'https://zhixing-agent-gateway.rosannabebe.chatgpt.site/api/generate';
+const DEFAULT_ENDPOINT = 'http://127.0.0.1:8787/api/generate';
 const $ = (s, root = document) => root.querySelector(s);
 const uid = (prefix = 'id') => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const day = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });

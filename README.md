@@ -72,9 +72,11 @@ GitHub Pages 只能托管静态网页。需要真实模型时，将 `server/ai-p
 
 Pages 不运行 `server/ai-proxy.mjs`。真实模型由单独部署的服务端处理。`.env`、本地口令文件和原始方案均不进入仓库。该展示页使用虚构数据，GitHub Pages 本身不是企业内网或企业身份验证方案。
 
-## 在线模型连接
+## 模型连接与当前部署状态
 
-网页“模型与数据设置”已预填在线接口 `https://zhixing-agent-gateway.rosannabebe.chatgpt.site/api/generate`。填写参赛组访问口令并确认数据发送范围后，任务规划和文本生成使用真实 DeepSeek。口令只保存在当前浏览器会话，关闭会话后需重新输入。
+GitHub Pages 网页已上线。真实 DeepSeek 的工具规划及纪要生成已通过本机服务验证；Sites 云端接口因源码同步凭据反复过期，尚未完成部署。预期云端地址 `https://zhixing-agent-gateway.rosannabebe.chatgpt.site/api/generate` 目前不能视为可用接口。
+
+网页“模型与数据设置”默认填写本机接口 `http://127.0.0.1:8787/api/generate`。在运行服务的同一台电脑中，填写参赛组访问口令并确认数据发送范围后，可使用真实 DeepSeek。其他电脑暂时可独立使用规则演示；云端部署成功后再改用上述 HTTPS 接口。口令只保存在当前浏览器会话。
 
 访问口令单独保存在项目所有者本地的 `server/访问信息.local.txt`，该文件被 Git 忽略，不随仓库或静态网页发布。只向获准的参赛成员分享口令。未连接服务时，界面明确使用规则演示模式。
 
