@@ -190,6 +190,7 @@ async function startAgent() {
   if(busy || run?.waiting)return;
   const goal=$('#agent-goal')?.value.trim()||'';
   if(!goal)throw new Error('请先描述要完成的业务任务。');
+  const startedAt=Date.now();
   busy=true;render();
   try{
     const planState=state,planRevision=state.meeting.revision;
@@ -197,7 +198,7 @@ async function startAgent() {
     if(s.endpoint&&!s.consent)throw new Error('请先在模型设置中确认允许发送业务上下文。');
     const plan=s.endpoint?await requestAgentPlan(goal,state,s):getDemoPlan(goal,state);
     if(state!==planState || planRevision!==state.meeting.revision)throw new Error('任务背景在规划期间已变化，请重新发起任务。');
-    run={...plan,goal,steps:plan.steps.map(s=>({...s,status:'pending'})),startedAt:Date.now(),finishedAt:null,waiting:null,index:0};
+    run={...plan,goal,steps:plan.steps.map(s=>({...s,status:'pending'})),startedAt,finishedAt:null,waiting:null,index:0};
     log(`发起智能体任务：${goal.slice(0,45)}`);save();
   }finally{busy=false;render();}
   await advanceAgent();
