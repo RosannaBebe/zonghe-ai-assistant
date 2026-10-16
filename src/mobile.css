@@ -97,7 +97,7 @@ dialog.mobile-material-preview[open] { display: flex; flex-direction: column; }
   :root { --mobile-nav-height: 68px; --mobile-safe-bottom: env(safe-area-inset-bottom, 0px); font-size: 15px; }
   body { min-width: 320px; }
   .shell { min-height: 100dvh; }
-  .main { margin-left: 0; padding-bottom: calc(var(--mobile-nav-height) + var(--mobile-safe-bottom) + 12px); }
+  .main { margin-left: 0; padding-bottom: calc(var(--mobile-nav-height) + var(--mobile-safe-bottom) + 76px); }
   .page { width: 100%; padding: 22px 16px 24px; }
   .mobile-only { display: initial; }
   button.mobile-only, .btn.mobile-only, .text-link { display: inline-flex; align-items: center; }
@@ -159,6 +159,8 @@ dialog.mobile-material-preview[open] { display: flex; flex-direction: column; }
   .mobile-nav-item { min-width: 0; min-height: 58px; padding: 6px 3px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #97a3b5; font-size: 11px; border-radius: 12px; }
   .mobile-nav-item .icon { width: 22px; height: 22px; stroke-width: 1.8; }
   .mobile-nav-item.active { color: var(--blue); background: #f0f4ff; font-weight: 600; }
+  .feedback-entry { right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(var(--mobile-nav-height) + var(--mobile-safe-bottom) + 12px); padding: 0 17px; }
+  .mobile-keyboard-open .feedback-entry { visibility: hidden; }
   .mobile-keyboard-open .mobile-bottom-nav { display: none; }
   .mobile-keyboard-open .main { padding-bottom: 12px; }
 
@@ -334,7 +336,7 @@ dialog.mobile-material-preview[open] { display: flex; flex-direction: column; }
   .guide-step p, .dialog-prose { font-size: 14px; line-height: 1.85; }
   .footnote { font-size: 11px; line-height: 1.8; margin-top: 22px; }
   .footnote > span:last-child { display: none; }
-  #toast { left: 50%; bottom: calc(var(--mobile-nav-height) + var(--mobile-safe-bottom) + 14px); min-width: 0; width: max-content; max-width: calc(100vw - 32px); padding: 13px 17px; font-size: 13px; line-height: 1.75; z-index: 110; }
+  #toast { left: 50%; bottom: calc(var(--mobile-nav-height) + var(--mobile-safe-bottom) + 72px); min-width: 0; width: max-content; max-width: calc(100vw - 32px); padding: 13px 17px; font-size: 13px; line-height: 1.75; z-index: 110; }
 
   /* Edit forms open from the bottom and keep actions inside the safe area. */
   dialog, dialog.wide {

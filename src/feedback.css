@@ -16,5 +16,13 @@
 @media(max-width:640px){.feedback-panel{padding:20px 17px}.feedback-intro{margin-bottom:18px}.feedback-intro h2{font-size:16px}.feedback-intro p{font-size:11px}.feedback-card{padding:16px}.feedback-card-meta{gap:6px 10px}.feedback-list-header{gap:10px}.feedback-list-header h2{font-size:14px}.feedback-form-meta{gap:10px}.feedback-actions .btn{min-width:120px}.feedback-empty{padding:32px 15px}.feedback-status{padding:10px 11px}}
 @media(max-width:640px){.feedback-dialog{padding:22px 18px;width:calc(100% - 24px);max-height:calc(100dvh - 24px)}.feedback-dialog .modal-head h2{font-size:18px}.feedback-dialog .feedback-textarea{font-size:16px;min-height:170px}.feedback-dialog .feedback-hint{font-size:10px}.feedback-dialog .feedback-actions .btn{min-width:100px}.feedback-admin-input{font-size:16px}.feedback-list-controls{gap:5px}.feedback-list-controls .btn{padding:8px 9px;font-size:10px}}
 @media(prefers-reduced-motion:reduce){.feedback-spinner{animation:none;border-right-color:var(--blue,#4263eb)}.feedback-textarea{transition:none}}
-.feedback-entry{color:var(--blue);background:var(--blue-light);font-weight:600}
-@media(max-width:767px){dialog.feedback-dialog{width:100%;max-width:100%;margin:0;border-radius:24px 24px 0 0;max-height:min(92dvh,var(--mobile-visual-height,92dvh));padding:24px 20px max(18px,env(safe-area-inset-bottom))}.feedback-dialog .feedback-actions{position:sticky;bottom:0;background:white;padding:12px 0;border-top:1px solid var(--line);z-index:1}.feedback-dialog-footer .text-link{display:inline-flex;align-items:center;min-height:44px}.top-actions .feedback-entry{min-width:64px;flex-shrink:0}}
+/* Shared shell control, outside the animated page so it stays viewport-fixed. */
+.feedback-entry{position:fixed;right:max(24px,env(safe-area-inset-right,0px));bottom:calc(24px + env(safe-area-inset-bottom,0px));z-index:65;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:0 20px;border:1px solid var(--blue);border-radius:999px;background:var(--blue);color:#fff;font-size:14px;font-weight:600;line-height:1.5;white-space:nowrap;box-shadow:0 6px 22px #4263eb38;transition:background .15s,box-shadow .15s}
+.feedback-entry svg{width:19px;height:19px}
+.feedback-entry:hover{background:#3453d0;box-shadow:0 8px 25px #4263eb4d}
+.feedback-entry:focus-visible{outline:3px solid #91a9ff;outline-offset:4px}
+.main{padding-bottom:72px}
+#toast{bottom:calc(84px + env(safe-area-inset-bottom,0px))}
+body:has(dialog[open]) .feedback-entry,.mobile-drawer-open .feedback-entry{visibility:hidden}
+@media(max-width:767px){dialog.feedback-dialog{width:100%;max-width:100%;margin:0;border-radius:24px 24px 0 0;max-height:min(92dvh,var(--mobile-visual-height,92dvh));padding:24px 20px max(18px,env(safe-area-inset-bottom))}.feedback-dialog .feedback-actions{position:sticky;bottom:0;background:white;padding:12px 0;border-top:1px solid var(--line);z-index:1}.feedback-dialog-footer .text-link{display:inline-flex;align-items:center;min-height:44px}}
+@media print{.feedback-entry{display:none!important}}
