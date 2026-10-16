@@ -1,6 +1,8 @@
 import { createInitialState, sortParticipants, parseParticipantsCSV, participantsToCSV, generateAgenda, deriveMinutes, invalidateMeeting } from './domain.js';
-import { escapeHtml as esc, downloadFile, downloadDocx, createSeatMapSvg, openPrintSheet } from './exports.js';
+import { escapeHtml as esc, downloadFile, downloadDocx, createDocxBlob, createSeatMapSvg, openPrintSheet } from './exports.js';
 import { getDemoPlan, requestAgentPlan } from './agent.js';
+import { renderFeedbackPage, initializeFeedbackUI, ensureFeedbackLoaded } from './feedback-ui.js';
+import { isMobile, renderMobileNav, enhanceMobileTables, renderMobileSeatList, openMaterialPreview, openSeatMapViewer, shareOrDownloadFile, installMobileEnhancements } from './mobile.js';
 
 const STORE = 'zhixing-workbench-v1';
 const DEFAULT_ENDPOINT = 'https://zhixing-agent-gateway.rosannabebe.chatgpt.site/api/generate';
@@ -17,12 +19,14 @@ try {
 state.checklist ||= [true, true, false, false, false];
 state.doc ||= { template: '会议纪要', input: '', output: '', reviewed: false };
 state.generatedRevision ||= 0;
-let section = ['agent', 'meeting', 'news', 'documents', 'knowledge'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'agent';
+let section = ['agent', 'meeting', 'news', 'documents', 'knowledge', 'feedback'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'agent';
 let tab = 'people', newsFilter = '全部', knowledgeFilter = '全部', search = '', mobileOpen = false;
 let toastTimer, run = null, busy = false;
-const sectionNames = { agent: '智能体工作台', meeting: '会务助手', news: '政务信息助手', documents: '公文助手', knowledge: '综合知识库' };
+let drawerReturnFocus = null;
+const sectionNames = { agent: '智能体工作台', meeting: '会务助手', news: '政务信息助手', documents: '公文助手', knowledge: '综合知识库', feedback: '反馈列表' };
 const checklistItems = ['确认会议时间与地点', '收集参会人员信息', '核对主客排序与座次', '准备会议材料与名签', '检查投屏及现场设备'];
 const glyphs = {
+  message: '<path d="M21 11a8 8 0 0 1-8 8H6l-4 3V11a8 8 0 0 1 8-8h3a8 8 0 0 1 8 8Z"/><path d="M7 9h9M7 13h6"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18M8 15h2M14 15h2"/>',
   news: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8M8 15h3M8 18h8M15 15h1"/>',
@@ -68,11 +72,49 @@ const confirmed = () => state.meeting.confirmedRevision === state.meeting.revisi
 const ready = () => confirmed() && state.generatedRevision === state.meeting.revision;
 const meetingSignature = () => JSON.stringify(['title','date','time','location','host','topic'].map(key=>state.meeting[key]));
 function settings() { let s = {}; try { s = JSON.parse(localStorage.getItem('zhixing-model') || '{}'); s.token = sessionStorage.getItem('zhixing-access') || ''; } catch {} return s; }
+function syncMobileDrawer() {
+  const mobile = isMobile();
+  if (!mobile) mobileOpen = false;
+  const open = mobile && mobileOpen;
+  document.body.classList.toggle('mobile-drawer-open', open);
+  const drawer = $('#mobile-more-drawer');
+  drawer?.classList.toggle('mobile-open', open);
+  $('.mobile-overlay')?.classList.toggle('open', open);
+  if (drawer) {
+    drawer.inert = mobile && !open;
+    if (mobile) drawer.setAttribute('aria-hidden', String(!open));
+    else drawer.removeAttribute('aria-hidden');
+    if (open) { drawer.setAttribute('role', 'dialog'); drawer.setAttribute('aria-modal', 'true'); }
+    else { drawer.removeAttribute('role'); drawer.removeAttribute('aria-modal'); }
+  }
+  for (const selector of ['.main', '.mobile-bottom-nav']) { const node = $(selector); if (node) node.inert = open; }
+  for (const trigger of document.querySelectorAll('button[data-action="mobile"]')) trigger.setAttribute('aria-expanded', String(open));
+  for (const item of document.querySelectorAll('.mobile-nav-item')) {
+    const active = item.dataset.action === 'mobile' ? open || ['knowledge','feedback'].includes(section) : !open && item.dataset.section === section;
+    item.classList.toggle('active', active);
+    if (active && item.dataset.action === 'nav') item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+  }
+}
+function setMobileDrawer(open, { restoreFocus = true } = {}) {
+  const wasOpen = mobileOpen;
+  if (open && !wasOpen) drawerReturnFocus = document.activeElement;
+  mobileOpen = Boolean(open && isMobile());
+  syncMobileDrawer();
+  if (mobileOpen) $('#mobile-more-drawer .mobile-drawer-close')?.focus({ preventScroll: true });
+  else if (wasOpen && restoreFocus) {
+    const target = drawerReturnFocus?.isConnected ? drawerReturnFocus : $('.mobile-bottom-nav [data-action="mobile"]');
+    target?.focus({ preventScroll: true });
+  }
+}
 function go(next, nextTab) { section = next; if (nextTab) tab = nextTab; mobileOpen = false; location.hash = next; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
 function render() {
   document.title = `${sectionNames[section]} · 知行`;
   const nav = (id, name, g, suffix = '') => `<button class="nav-item ${section === id ? 'active' : ''}" data-action="nav" data-section="${id}">${icon(g)}<span>${name}</span>${suffix}</button>`;
-  $('#app').innerHTML = `<div class="shell"><div class="mobile-overlay ${mobileOpen ? 'open' : ''}" data-action="mobile"></div><aside class="sidebar ${mobileOpen ? 'mobile-open' : ''}"><div class="brand"><img src="./assets/logo.svg" alt="知行标志"><div><strong>知行</strong><small>综合管理 AI 智能助手</small></div></div><div class="nav-label">WORKSPACE</div>${nav('agent', '智能体工作台', 'spark')}<div class="nav-label" style="margin-top:13px">业务工具</div>${nav('meeting', '会务助手', 'calendar', '<small>核心</small>')}${nav('news', '政务信息助手', 'news')}${nav('documents', '公文助手', 'file')}${nav('knowledge', '综合知识库', 'book')}<div class="sidebar-bottom"><div class="nav-divider"></div><button class="nav-item" data-action="guide">${icon('play')}<span>参赛演示指南</span></button><button class="nav-item" data-action="settings">${icon('settings')}<span>模型与数据设置</span></button><div class="local-note"><span><i class="dot"></i>浏览器本地保存</span>演示数据 · 仅当前设备可见</div><div class="user"><div class="avatar">综</div><div><strong>综合管理部</strong><small>经营管理赛道 · 参赛演示</small></div></div></div></aside><main class="main"><header class="topbar"><button class="mobile-menu" data-action="mobile" aria-label="展开导航">${icon('menu')}<b>知行</b></button><div class="breadcrumbs">经营管理工作空间 ${icon('chevron')}<b>${sectionNames[section]}</b></div><div class="top-actions"><span class="top-date">${new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' })}</span><button class="mode-pill" data-action="settings">${icon('spark')}${settings().endpoint ? '模型接口已配置' : '规则演示模式'}</button><button class="btn ghost small" data-action="guide">${icon('info')}使用指南</button></div></header><div class="page page-fade">${section === 'agent' ? renderAgent() : section === 'meeting' ? renderMeeting() : section === 'news' ? renderNews() : section === 'documents' ? renderDocuments() : renderKnowledge()}<footer class="footnote"><span>${icon('shield')}所有预置人物与业务内容均为虚构演示。实际业务结果需人工审核。</span><span>知行 · 让经营管理更高效</span></footer></div></main></div>`;
+  $('#app').innerHTML = `<div class="shell"><div class="mobile-overlay ${mobileOpen ? 'open' : ''}" data-action="mobile" aria-hidden="true"></div><aside id="mobile-more-drawer" class="sidebar ${mobileOpen ? 'mobile-open' : ''}" aria-label="更多功能"><button type="button" class="mobile-drawer-close" data-action="mobile" aria-label="关闭更多功能">${icon('close')}</button><div class="brand"><img src="./assets/logo.svg" alt="知行标志"><div><strong>知行</strong><small>综合管理 AI 智能助手</small></div></div><div class="nav-label">WORKSPACE</div>${nav('agent', '智能体工作台', 'spark')}<div class="nav-label" style="margin-top:13px">业务工具</div>${nav('meeting', '会务助手', 'calendar', '<small>核心</small>')}${nav('news', '政务信息助手', 'news')}${nav('documents', '公文助手', 'file')}${nav('knowledge', '综合知识库', 'book')}${nav('feedback', '反馈列表', 'message', '<small>临时</small>')}<div class="sidebar-bottom"><div class="nav-divider"></div><button class="nav-item" data-action="guide">${icon('play')}<span>参赛演示指南</span></button><button class="nav-item" data-action="settings">${icon('settings')}<span>模型与数据设置</span></button><div class="local-note"><span><i class="dot"></i>浏览器本地保存</span>演示数据 · 仅当前设备可见</div><div class="user"><div class="avatar">综</div><div><strong>综合管理部</strong><small>经营管理赛道 · 参赛演示</small></div></div></div></aside><main class="main"><header class="topbar"><button class="mobile-menu" data-action="mobile" aria-label="打开更多功能" aria-controls="mobile-more-drawer" aria-expanded="${mobileOpen}">${icon('menu')}<b>知行</b></button><div class="breadcrumbs">经营管理工作空间 ${icon('chevron')}<b>${sectionNames[section]}</b></div><div class="top-actions"><button type="button" class="btn small feedback-entry" data-feedback-action="open">${icon('message')}反馈</button><span class="top-date">${new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' })}</span><button class="mode-pill" data-action="settings">${icon('spark')}${settings().endpoint ? '模型接口已配置' : '规则演示模式'}</button><button class="btn ghost small" data-action="guide">${icon('info')}使用指南</button></div></header><div class="page page-fade">${section === 'agent' ? renderAgent() : section === 'meeting' ? renderMeeting() : section === 'news' ? renderNews() : section === 'documents' ? renderDocuments() : section === 'feedback' ? renderFeedbackPage() : renderKnowledge()}<footer class="footnote"><span>${icon('shield')}所有预置人物与业务内容均为虚构演示。实际业务结果需人工审核。</span><span>知行 · 让经营管理更高效</span></footer></div></main>${renderMobileNav(section,mobileOpen)}</div>`;
+  enhanceMobileTables(document);
+  syncMobileDrawer();
+  if(section==='feedback')void ensureFeedbackLoaded();
 }
 function pageHeading(title, description, action = '') { return `<div class="page-title"><div><p class="eyebrow">${section === 'agent' ? 'BUSINESS OPERATIONS AGENT' : 'OPERATIONS WORKSPACE'}</p><h1>${title}</h1><p>${description}</p></div>${action}</div>`; }
 function renderAgent() {
@@ -88,7 +130,7 @@ function renderMeeting() {
 }
 function renderPeople() {
   const ordered = people();
-  return `<div class="toolbar"><div><h3>参会名单</h3><p>统一维护人员信息，自动同步至各类会务材料</p></div><div class="toolbar-actions">${btn(`${icon('download')}模板`, 'csv-template', 'small')}${btn(`${icon('upload')}导入 CSV`, 'import-people', 'small')}${btn(`${icon('plus')}添加人员`, 'add-person', 'primary small')}</div></div><div class="rule-row"><span>排序规则</span><select class="select-mini" id="sort-rule" aria-label="人员排序规则"><option value="guest-first" ${state.meeting.sortRule === 'guest-first' ? 'selected' : ''}>职级优先 · 同级客方在前</option><option value="host-first" ${state.meeting.sortRule === 'host-first' ? 'selected' : ''}>职级优先 · 同级主方在前</option></select>${badge(confirmed() ? `V${state.meeting.revision} 已确认` : `V${state.meeting.revision} 待确认`, confirmed() ? 'green' : 'amber')}${state.orderOverride ? badge('含人工调整', 'blue') : ''}</div><div class="table-scroll"><table><thead><tr><th>序号</th><th>姓名</th><th>单位 / 部门</th><th>职务</th><th>身份</th><th>职级</th><th>操作</th></tr></thead><tbody>${ordered.map((p, i) => `<tr><td class="text-subtle">${String(i + 1).padStart(2,'0')}</td><td><div class="person-cell"><span class="person-avatar ${p.side}">${esc(p.name.slice(-2))}</span><span class="person-name">${esc(p.name)}</span></div></td><td class="text-subtle">${esc(p.organization)}</td><td>${esc(p.position)}</td><td>${badge(p.side === 'guest' ? '客方' : '主方', p.side === 'guest' ? 'green' : 'blue')}</td><td class="text-subtle">${p.rank}</td><td><div class="row-actions"><button class="icon-button" data-action="move-person" data-id="${esc(p.id)}" data-direction="-1" ${i === 0 ? 'disabled' : ''} aria-label="上移${esc(p.name)}">${icon('up')}</button><button class="icon-button" data-action="move-person" data-id="${esc(p.id)}" data-direction="1" ${i === ordered.length-1 ? 'disabled' : ''} aria-label="下移${esc(p.name)}">${icon('down')}</button><button class="icon-button" data-action="edit-person" data-id="${esc(p.id)}" aria-label="编辑${esc(p.name)}">${icon('edit')}</button></div></td></tr>`).join('')}</tbody></table>${!ordered.length ? '<div class="empty">添加或导入参会人员，开始准备会务材料。</div>' : ''}</div><div class="table-footer"><p>共 ${ordered.length} 位参会人员 · 职级数字越小越靠前<br><strong>人员变更后需重新确认，确保材料一致</strong></p>${btn(`${icon('check')}${confirmed() ? '名单与排序已确认' : '确认名单与排序'}`, 'confirm-people', confirmed() ? 'light' : 'primary', !ordered.length || confirmed() ? 'disabled' : '')}</div>`;
+  return `<div class="toolbar"><div><h3>参会名单</h3><p>统一维护人员信息，自动同步至各类会务材料</p></div><div class="toolbar-actions">${btn(`${icon('download')}模板`, 'csv-template', 'small')}${btn(`${icon('upload')}导入 CSV`, 'import-people', 'small')}${btn(`${icon('plus')}添加人员`, 'add-person', 'primary small')}</div></div><div class="rule-row"><span>排序规则</span><select class="select-mini" id="sort-rule" aria-label="人员排序规则"><option value="guest-first" ${state.meeting.sortRule === 'guest-first' ? 'selected' : ''}>职级优先 · 同级客方在前</option><option value="host-first" ${state.meeting.sortRule === 'host-first' ? 'selected' : ''}>职级优先 · 同级主方在前</option></select>${badge(confirmed() ? `V${state.meeting.revision} 已确认` : `V${state.meeting.revision} 待确认`, confirmed() ? 'green' : 'amber')}${state.orderOverride ? badge('含人工调整', 'blue') : ''}</div><div class="table-scroll"><table><thead><tr><th>序号</th><th>姓名</th><th>单位 / 部门</th><th>职务</th><th>身份</th><th>职级</th><th>操作</th></tr></thead><tbody>${ordered.map((p, i) => `<tr><td class="text-subtle">${String(i + 1).padStart(2,'0')}</td><td><div class="person-cell"><span class="person-avatar ${p.side}">${esc(p.name.slice(-2))}</span><span class="person-name">${esc(p.name)}</span></div></td><td class="text-subtle">${esc(p.organization)}</td><td>${esc(p.position)}</td><td>${badge(p.side === 'guest' ? '客方' : '主方', p.side === 'guest' ? 'green' : 'blue')}</td><td class="text-subtle">${p.rank}</td><td><div class="row-actions"><button class="icon-button" data-action="move-person" data-id="${esc(p.id)}" data-direction="-1" ${i === 0 ? 'disabled' : ''} aria-label="上移${esc(p.name)}">${icon('up')}<span class="mobile-action-label">上移</span></button><button class="icon-button" data-action="move-person" data-id="${esc(p.id)}" data-direction="1" ${i === ordered.length-1 ? 'disabled' : ''} aria-label="下移${esc(p.name)}">${icon('down')}<span class="mobile-action-label">下移</span></button><button class="icon-button" data-action="edit-person" data-id="${esc(p.id)}" aria-label="编辑${esc(p.name)}">${icon('edit')}<span class="mobile-action-label">编辑</span></button></div></td></tr>`).join('')}</tbody></table>${!ordered.length ? '<div class="empty">添加或导入参会人员，开始准备会务材料。</div>' : ''}</div><div class="table-footer"><p>共 ${ordered.length} 位参会人员 · 职级数字越小越靠前<br><strong>人员变更后需重新确认，确保材料一致</strong></p>${btn(`${icon('check')}${confirmed() ? '名单与排序已确认' : '确认名单与排序'}`, 'confirm-people', confirmed() ? 'light' : 'primary', !ordered.length || confirmed() ? 'disabled' : '')}</div>`;
 }
 function renderMeetingAside() {
   const count = state.checklist.filter(Boolean).length;
@@ -97,7 +139,7 @@ function renderMeetingAside() {
 }
 function agenda() { return state.agenda || generateAgenda(state.meeting); }
 function renderAgenda() { return `<div class="toolbar"><div><h3>会议议程</h3><p>根据会议信息生成的建议议程，可按实际安排修改</p></div>${btn(`${icon('edit')}编辑议程`, 'edit-agenda', 'small')}</div><div class="content-pad" style="padding-top:0"><div class="notice">${icon('info')}这是建议议程。主持人与发言人需由会务负责人确认。</div>${agenda().map(a => `<div class="agenda-item"><div class="agenda-time">${esc(a.time)}</div><div class="agenda-body"><h4>${esc(a.title)}</h4><p>${esc(a.speaker)}</p></div></div>`).join('')}</div>`; }
-function renderSeats() { return `<div class="toolbar"><div><h3>座位编排</h3><p>按当前名单顺序分配示意座位 · 共 ${state.participants.length} 席</p></div><select id="seat-layout" class="select-mini" aria-label="座位布局"><option value="boardroom" ${state.meeting.layout === 'boardroom' ? 'selected' : ''}>会议室长桌</option><option value="round" ${state.meeting.layout === 'round' ? 'selected' : ''}>圆桌布局</option></select></div><div class="content-pad" style="padding-top:0"><div class="notice ${confirmed() ? '' : 'amber'}">${icon('info')}${confirmed() ? '人员顺序已确认。实际礼宾座次以企业规范及现场安排为准。' : '当前为待确认预览。请先在参会人员页核对并确认排序。'}</div><div class="seat-preview">${createSeatMapSvg(people(),state.meeting)}</div><div class="actions-line">${btn(`${icon('download')}导出 SVG 座位图`, 'export-seats', 'small', !ready() ? 'disabled' : '')}${btn('生成会务材料', 'generate-materials', 'primary small', !confirmed() ? 'disabled' : '')}</div></div>`; }
+function renderSeats() { return `<div class="toolbar"><div><h3>座位编排</h3><p>按当前名单顺序分配示意座位 · 共 ${state.participants.length} 席</p></div><select id="seat-layout" class="select-mini" aria-label="座位布局"><option value="boardroom" ${state.meeting.layout === 'boardroom' ? 'selected' : ''}>会议室长桌</option><option value="round" ${state.meeting.layout === 'round' ? 'selected' : ''}>圆桌布局</option></select></div><div class="content-pad" style="padding-top:0"><div class="notice ${confirmed() ? '' : 'amber'}">${icon('info')}${confirmed() ? '人员顺序已确认。实际礼宾座次以企业规范及现场安排为准。' : '当前为待确认预览。请先在参会人员页核对并确认排序。'}</div><div class="seat-preview">${createSeatMapSvg(people(),state.meeting)}${btn(`${icon('search')}放大查看`,'preview-seats','mobile-only mobile-seat-open small')}</div><div class="mobile-only"><div class="mobile-preview-list-heading">座次列表 <span>${state.participants.length} 位</span></div>${renderMobileSeatList(people())}</div><div class="actions-line">${btn(`${icon('download')}导出 SVG 座位图`, 'export-seats', 'small', !ready() ? 'disabled' : '')}${btn('生成会务材料', 'generate-materials', 'primary small', !confirmed() ? 'disabled' : '')}</div></div>`; }
 function renderMaterials() {
   const materials = [['users','参会名单','统一名单，包含单位、职务与排序。','CSV','export-list'],['calendar','会议议程','包含时间、议题与发言人安排。','Word','export-agenda'],['book','会议手册','会议信息、议程与参会名单合成。','Word','export-handbook'],['file','桌签与饭签','可直接打印，支持 A4 排版。','打印','export-nameplates'],['grid','座位图','会议室长桌、圆桌两种布局。','SVG','export-seats']];
   return `<div class="toolbar"><div><h3>五类材料，同一份数据</h3><p>${ready() ? `全部材料已关联确认名单 V${state.meeting.revision}` : '确认名单后，一键生成当前版本的全部材料'}</p></div>${btn(`${icon('spark')}${ready() ? '重新生成' : '生成全部材料'}`, 'generate-materials', 'primary small', !confirmed() ? 'disabled' : '')}</div><div class="content-pad" style="padding-top:0"><div class="notice ${confirmed() ? 'blue' : 'amber'}">${icon(confirmed() ? 'link' : 'info')}${confirmed() ? '增删人员、调整职务或修改会议信息后，所有材料将同步失效；重新确认即可生成新版本。' : '请先完成名单排序的人工确认，再生成与导出材料。'}</div><div class="material-grid">${materials.map(([g,title,desc,format,action]) => `<article class="material"><div class="material-icon">${icon(g)}</div>${badge(ready() ? `V${state.meeting.revision} 已就绪` : '待生成', ready() ? 'green' : 'gray')}<h4>${title}</h4><p>${desc}</p><div class="material-actions">${btn(`${icon('download')}${format === '打印' ? '桌签预览' : `导出 ${format}`}`, action, 'small', !ready() ? 'disabled' : '')}${action === 'export-nameplates' ? btn('饭签预览','export-mealplates','small',!ready() ? 'disabled' : '') : ''}</div></article>`).join('')}</div></div>`;
@@ -248,9 +290,11 @@ function exportMaterial(action) {
 document.addEventListener('click',async event=>{
   const el=event.target.closest('[data-action]');if(!el||el.disabled)return;
   const a=el.dataset.action,id=el.dataset.id;
+  if(mobileOpen && a!=='mobile' && a!=='nav')setMobileDrawer(false,{restoreFocus:false});
   try{
+    if(mobileOpen&&a!=='mobile'&&el.closest('#mobile-more-drawer'))setMobileDrawer(false,{restoreFocus:false});
     if(a==='nav')go(el.dataset.section);
-    else if(a==='mobile'){mobileOpen=!mobileOpen;render();}
+    else if(a==='mobile')setMobileDrawer(!mobileOpen);
     else if(a==='tab'){tab=el.dataset.tab;render();}
     else if(a==='close-modal')$('#modal').close();
     else if(a==='edit-meeting')meetingModal();
@@ -264,7 +308,8 @@ document.addEventListener('click',async event=>{
     else if(a==='choose-csv'){if(!$('#csv-consent').checked)throw new Error('请先确认接待信息的授权条件。');$('#csv-file').click();}
     else if(a==='edit-agenda')agendaModal();
     else if(a==='generate-materials'){generateMaterials();tab='materials';render();toast('五类材料已按当前确认名单生成。');}
-    else if(['export-list','export-agenda','export-handbook','export-nameplates','export-mealplates','export-seats'].includes(a))exportMaterial(a);
+    else if(a==='preview-seats')openSeatMapViewer(people(),state.meeting,{allowExport:ready()});
+    else if(['export-list','export-agenda','export-handbook','export-nameplates','export-mealplates','export-seats'].includes(a))await exportMaterial(a);
     else if(a==='import-text'){$('#text-file').dataset.target=el.dataset.target;$('#text-file').click();}
     else if(a==='generate-minutes'){busy=true;render();try{await makeMinutes();}finally{busy=false;render();}}
     else if(a==='review-minutes'){reviewMinutes();render();toast('纪要已审核，行动项已录入本地督办。');if(run?.waiting==='extract_tasks'){go('agent');await advanceAgent();}}
@@ -304,6 +349,7 @@ document.addEventListener('click',async event=>{
 });
 
 document.addEventListener('submit',event=>{
+  if(event.target.id?.startsWith('feedback-'))return;
   event.preventDefault();const form=event.target;const f=new FormData(form);const text=n=>String(f.get(n)||'').trim();
   try{
     if(form.id==='person-form'){
@@ -352,7 +398,7 @@ function syncReviewControls() {
 }
 document.addEventListener('input',event=>{
   const el=event.target;
-  if(el.id==='knowledge-search'){search=el.value;const pos=el.selectionStart;render();const input=$('#knowledge-search');input.focus();input.setSelectionRange(pos,pos);return;}
+  if(el.id==='knowledge-search'){search=el.value;if(event.isComposing)return;const pos=el.selectionStart;render();const input=$('#knowledge-search');input.focus();input.setSelectionRange(pos,pos);return;}
   if(el.id==='minutes-input'){state.minutes.input=el.value;state.minutes.reviewed=false;}
   if(el.id==='minutes-output'){state.minutes.output=el.value;state.minutes.reviewed=false;}
   if(el.dataset.draftIndex!==undefined){const draft=state.minutes.drafts?.[Number(el.dataset.draftIndex)];if(draft){draft[el.dataset.draftField]=el.value;state.minutes.reviewed=false;}}
@@ -380,5 +426,19 @@ document.addEventListener('change',async event=>{
 });
 window.addEventListener('hashchange',()=>{const s=location.hash.slice(1);if(sectionNames[s]&&s!==section){section=s;render();}});
 $('#modal').addEventListener('click',event=>{if(event.target===$('#modal')){const r=$('#modal').getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)$('#modal').close();}});
+initializeFeedbackUI({getPage:()=>section,navigate:next=>go(next),refresh:()=>render(),notify:toast});
+installMobileEnhancements();
+window.addEventListener('resize',syncMobileDrawer);
+document.addEventListener('keydown',event=>{
+  if(!mobileOpen)return;
+  if(event.key==='Escape'){event.preventDefault();setMobileDrawer(false);}
+  else if(event.key==='Tab'){
+    const items=[...document.querySelectorAll('#mobile-more-drawer button, #mobile-more-drawer a[href]')].filter(el=>!el.disabled);
+    if(!items.length)return;
+    const first=items[0],last=items[items.length-1];
+    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
+    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+  }
+});
 render();
 if(storageWarning)toast('本地数据无法读取，已恢复演示样例。');

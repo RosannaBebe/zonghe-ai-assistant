@@ -66,6 +66,7 @@ function createApp() {
   }
 
   const document = {
+    body: makeNode(),
     title: '',
     querySelector(selector) {
       if (nodes.has(selector)) return nodes.get(selector);
@@ -81,6 +82,10 @@ function createApp() {
   for (const id of ['app', 'modal', 'toast', 'csv-file', 'text-file']) nodes.set(`#${id}`, makeNode({ id }));
   const context = vm.createContext({
     ...domain, ...exportsModule, ...agent,
+    isMobile: () => false,
+    renderMobileNav: () => '', enhanceMobileTables() {}, installMobileEnhancements() {},
+    renderMobileSeatList: () => '', openMaterialPreview() {}, openSeatMapViewer() {}, shareOrDownloadFile() {},
+    renderFeedbackPage: () => '<h1>反馈记录</h1>', initializeFeedbackUI() {}, ensureFeedbackLoaded() {},
     esc: exportsModule.escapeHtml,
     downloadDocx: (...args) => downloads.push(args),
     document, console, Date, Math, JSON, URL, AbortSignal, performance,

@@ -34,6 +34,8 @@ npm test
 
 完整产品取舍与五分钟讲解见 [产品设计与参赛演示](docs/产品设计与参赛演示.md)。
 
+手机端使用底部导航、人员卡片、座位图缩放和当前页材料预览。电脑和手机顶部均有“反馈”入口，最多提交 1000 字；“反馈列表”位于左侧导航或手机“更多”中，使用独立管理口令查看。反馈存储配置与使用步骤见 [移动端与反馈](docs/移动端与反馈.md)。
+
 ## 使用已上线的 DeepSeek 服务
 
 GitHub Pages 网页已连接独立部署的 Sites 模型服务，默认接口为 <https://zhixing-agent-gateway.rosannabebe.chatgpt.site/api/generate>。接口受访问口令保护，DeepSeek API 密钥仅保存在服务端。
