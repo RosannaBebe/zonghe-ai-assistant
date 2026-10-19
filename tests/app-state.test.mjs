@@ -24,6 +24,7 @@ function createApp() {
   const nodes = new Map();
   const controls = [];
   const downloads = [];
+  const agentCalls = [];
   const attributes = (source) => Object.fromEntries([...source.matchAll(/([\w-]+)\s*=\s*"([^"]*)"/g)].map((match) => [match[1], decode(match[2])]));
   const datasetOf = (attrs) => Object.fromEntries(Object.entries(attrs).filter(([name]) => name.startsWith('data-')).map(([name, value]) => [name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), value]));
 
@@ -63,6 +64,10 @@ function createApp() {
       const attrs = attributes(match[2]);
       if (!nodes.has(`#${attrs.id}`)) nodes.set(`#${attrs.id}`, makeNode({ id: attrs.id, value: attrs.value || '', dataset: datasetOf(attrs) }));
     }
+    for (const match of html.matchAll(/<textarea\b([^>]*)>([\s\S]*?)<\/textarea>/g)) {
+      const attrs = attributes(match[1]);
+      if (attrs.id && nodes.has(`#${attrs.id}`)) nodes.get(`#${attrs.id}`).value = decode(match[2]);
+    }
   }
 
   const document = {
@@ -82,6 +87,7 @@ function createApp() {
   for (const id of ['app', 'modal', 'toast', 'csv-file', 'text-file']) nodes.set(`#${id}`, makeNode({ id }));
   const context = vm.createContext({
     ...domain, ...exportsModule, ...agent,
+    requestAgentPlan: async (...args) => { agentCalls.push(args); throw new Error('Unexpected model planning request in an isolated app test.'); },
     isMobile: () => false,
     renderMobileNav: () => '', enhanceMobileTables() {}, installMobileEnhancements() {},
     renderMobileSeatList: () => '', openMaterialPreview() {}, openSeatMapViewer() {}, shareOrDownloadFile() {},
@@ -104,16 +110,23 @@ function createApp() {
     for (const callback of listeners.get(type) || []) await callback({ target, preventDefault() {} });
   };
   return {
-    api, downloads, nodes,
+    api, downloads, nodes, storage, session, agentCalls,
     get state() { return api.getState(); },
     control: (action) => document.querySelector(`[data-action="${action}"]`),
     click: (action, extras = {}) => dispatch('click', makeNode({ dataset: { action, ...extras } })),
     submit: (id, fields) => dispatch('submit', { id, fields }),
-    input: (id, value, dataset = {}) => dispatch('input', makeNode({ id, value, dataset })),
-    connect(fetchImpl) {
-      storage.set('zhixing-model', JSON.stringify({ endpoint: 'https://relay.example/api/generate', consent: true }));
+    input: (id, value, dataset = {}) => {
+      const node = nodes.get(`#${id}`) || makeNode({ id });
+      node.value = value;
+      node.dataset = dataset;
+      return dispatch('input', node);
+    },
+    connect(fetchImpl, { token = 'test-model-access-token', consent = true, endpoint = 'https://relay.example/api/generate' } = {}) {
+      storage.set('zhixing-model', JSON.stringify({ endpoint, consent }));
+      session.set('zhixing-access', token);
       context.fetch = fetchImpl;
     },
+    planWith(handler) { context.requestAgentPlan = async (...args) => { agentCalls.push(args); return handler(...args); }; },
   };
 }
 
@@ -205,4 +218,97 @@ test('typing and clearing a document draft immediately updates its export and ut
   await app.input('doc-output', '');
   assert.equal(app.state.doc.reviewed, false);
   for (const action of ['export-doc', 'proof-doc', 'save-doc-knowledge']) assert.equal(app.control(action).disabled, true, `${action} should be blocked for an empty draft`);
+});
+
+test('model status describes the saved requirements without claiming a verified connection', () => {
+  const app = createApp();
+  assert.match(app.nodes.get('#app').innerHTML, /规则演示模式/);
+  app.connect(async () => { throw new Error('Status rendering must not fetch.'); }, { token: '', consent: true });
+  app.api.render();
+  assert.match(app.nodes.get('#app').innerHTML, /待填写模型口令/);
+  app.connect(async () => {}, { token: 'test-model-access-token', consent: false });
+  app.api.render();
+  assert.match(app.nodes.get('#app').innerHTML, /待确认数据授权/);
+  app.connect(async () => {}, { token: 'test-model-access-token', consent: true });
+  app.api.render();
+  assert.match(app.nodes.get('#app').innerHTML, /模型连接设置/);
+  assert.doesNotMatch(app.nodes.get('#app').innerHTML, /模型接口已配置|连接已验证/);
+});
+
+test('missing model password opens settings without a request and preserves the goal after saving', async () => {
+  const app = createApp();
+  let requests = 0;
+  app.connect(async () => { requests += 1; }, { token: '' });
+  app.api.go('agent');
+  const goal = '为周五的业务交流会整理会议议程，保留我写的这句话。';
+  await app.input('agent-goal', goal);
+  await app.click('agent-start');
+  assert.equal(requests, 0);
+  assert.equal(app.agentCalls.length, 0);
+  assert.equal(app.nodes.get('#modal').open, true);
+  assert.match(app.nodes.get('#toast').textContent, /填写模型访问口令/);
+  assert.equal(app.nodes.get('#agent-goal').value, goal);
+  await app.submit('settings-form', { endpoint: 'https://relay.example/api/generate', token: 'project-issued-password', consent: 'on' });
+  assert.equal(app.nodes.get('#agent-goal').value, goal, 'settings save must not replace the pending task with the default example');
+  assert.equal(app.session.get('zhixing-access'), 'project-issued-password');
+  assert.equal(JSON.parse(app.storage.get('zhixing-model')).token, undefined);
+  assert.ok(!app.storage.get('zhixing-model').includes('project-issued-password'));
+});
+
+test('missing model password blocks both minutes and document generation before fetch', async () => {
+  const app = createApp();
+  let requests = 0;
+  app.connect(async () => { requests += 1; }, { token: '   ' });
+  const originalMinutes = app.state.minutes.output;
+  await app.click('generate-minutes');
+  assert.equal(requests, 0);
+  assert.equal(app.state.minutes.output, originalMinutes);
+  assert.match(app.nodes.get('#toast').textContent, /填写模型访问口令/);
+  app.api.go('documents');
+  await app.input('doc-input', '请根据本周会议安排起草工作通知。');
+  await app.click('generate-doc');
+  assert.equal(requests, 0);
+  assert.equal(app.state.doc.output, '');
+  assert.equal(app.state.doc.input, '请根据本周会议安排起草工作通知。');
+  assert.match(app.nodes.get('#toast').textContent, /填写模型访问口令/);
+});
+
+test('configured model settings require a password and reject GitHub or provider keys before storing', async () => {
+  for (const [token, expected] of [['', /填写模型访问口令/], ['ghp_example', /GitHub 令牌/], ['github_pat_example', /GitHub 令牌/], ['sk-example', /DeepSeek API Key/]]) {
+    const app = createApp();
+    await app.click('settings');
+    await app.submit('settings-form', { endpoint: 'https://relay.example/api/generate', token, consent: 'on' });
+    assert.equal(app.storage.has('zhixing-model'), false);
+    assert.equal(app.session.has('zhixing-access'), false);
+    assert.match(app.nodes.get('#toast').textContent, expected);
+    assert.equal(app.nodes.get('#modal').open, true);
+  }
+  const demo = createApp();
+  await demo.submit('settings-form', { endpoint: '', token: '' });
+  assert.equal(JSON.parse(demo.storage.get('zhixing-model')).endpoint, '');
+  assert.match(demo.nodes.get('#app').innerHTML, /规则演示模式/);
+});
+
+test('a valid session password continues through generation and planning without changing storage policy', async () => {
+  const app = createApp();
+  const requests = [];
+  app.connect(async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, json: async () => ({ mode: 'deepseek', text: '根据已提供材料生成的待审核草稿。' }) };
+  });
+  await app.click('generate-minutes');
+  assert.equal(app.state.minutes.mode, 'deepseek');
+  app.api.go('documents');
+  await app.input('doc-input', '本周会议安排。');
+  await app.click('generate-doc');
+  assert.equal(app.state.doc.output, '根据已提供材料生成的待审核草稿。');
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every(({ options }) => options.headers.Authorization === 'Bearer test-model-access-token'));
+  app.planWith(async () => ({ mode: 'deepseek', summary: '准备会议议程。', steps: [{ tool: 'prepare_agenda', label: '准备议程', reason: '按输入目标整理。' }] }));
+  app.api.go('agent');
+  await app.input('agent-goal', '整理会议议程');
+  await app.click('agent-start');
+  assert.equal(app.agentCalls.length, 1);
+  assert.equal(app.agentCalls[0][2].token, 'test-model-access-token');
+  assert.ok(!app.storage.get('zhixing-model').includes('test-model-access-token'));
 });

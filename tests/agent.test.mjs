@@ -70,9 +70,9 @@ test('real planner calls only the relay agent endpoint with minimum context and 
     assert.doesNotMatch(requested.options.body, /private-|must-not-send|must-never-read-this|diet|phone|confirmedRevision|apiKey/);
     assert.equal(requested.options.method, 'POST');
     assert.ok(requested.options.signal instanceof AbortSignal);
-    await requestAgentPlan('整理纪要', {}, { endpoint: 'http://localhost:8787/api/agent' });
+    await requestAgentPlan('整理纪要', {}, { endpoint: 'http://localhost:8787/api/agent', token: 'local-relay-access-token' });
     assert.equal(JSON.parse(requested.options.body).context.hasMinutes, false);
-    assert.equal(requested.options.headers.Authorization, undefined);
+    assert.equal(requested.options.headers.Authorization, 'Bearer local-relay-access-token');
   } finally { globalThis.fetch = previousFetch; }
 });
 
@@ -84,14 +84,16 @@ test('real planner rejects unsafe configuration and invalid model plans without 
     for (const endpoint of ['javascript:alert(1)', 'https://user:password@relay.example/api/generate', 'https://relay.example/api/generate?key=secret', 'https://relay.example/not-an-api', 'https://api.deepseek.com/api/generate']) {
       await assert.rejects(requestAgentPlan('整理名单', state, { endpoint }), /地址|服务端|转发/);
     }
-    await assert.rejects(requestAgentPlan('整理名单', state, { endpoint: 'https://relay.example/api/generate', token: 'sk-provider-secret' }), /服务端/);
+    for (const token of ['', '  ', 'sk-provider-secret', 'ghp-github-secret'.replace('ghp-', 'ghp_'), 'github_pat_example']) {
+      await assert.rejects(requestAgentPlan('整理名单', state, { endpoint: 'https://relay.example/api/generate', token }), /口令|服务端/);
+    }
     assert.equal(calls, 0);
-    await assert.rejects(requestAgentPlan('整理名单', state, { endpoint: 'https://relay.example/api/generate' }), /未授权/);
+    await assert.rejects(requestAgentPlan('整理名单', state, { endpoint: 'https://relay.example/api/generate', token: 'relay-access-token' }), /未授权/);
     globalThis.fetch = async () => ({ ok: true, json: async () => plan(['lookup_people'], 'demo') });
-    await assert.rejects(requestAgentPlan('整理名单', state, { endpoint: 'https://relay.example/api/generate' }), /真实模型计划/);
+    await assert.rejects(requestAgentPlan('整理名单', state, { endpoint: 'https://relay.example/api/generate', token: 'relay-access-token' }), /真实模型计划/);
     globalThis.fetch = async () => ({ ok: false, status: 401, json: async () => ({ error: { message: 'private-token-reflection' } }) });
-    await assert.rejects(requestAgentPlan('整理名单', state, { endpoint: 'https://relay.example/api/generate' }), (error) => /口令无效/.test(error.message) && !/private-token/.test(error.message));
+    await assert.rejects(requestAgentPlan('整理名单', state, { endpoint: 'https://relay.example/api/generate', token: 'relay-access-token' }), (error) => /口令无效/.test(error.message) && !/private-token/.test(error.message));
     globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
-    await assert.rejects(requestAgentPlan('整理名单', state, { endpoint: 'https://relay.example/api/generate' }), /无法连接/);
+    await assert.rejects(requestAgentPlan('整理名单', state, { endpoint: 'https://relay.example/api/generate', token: 'relay-access-token' }), /无法连接/);
   } finally { globalThis.fetch = previousFetch; }
 });

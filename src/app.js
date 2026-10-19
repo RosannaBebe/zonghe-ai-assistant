@@ -1,6 +1,6 @@
 import { createInitialState, sortParticipants, parseParticipantsCSV, participantsToCSV, generateAgenda, deriveMinutes, invalidateMeeting } from './domain.js';
 import { escapeHtml as esc, downloadFile, downloadDocx, createDocxBlob, createSeatMapSvg, openPrintSheet } from './exports.js';
-import { getDemoPlan, requestAgentPlan } from './agent.js';
+import { getDemoPlan, requestAgentPlan, validateModelToken } from './agent.js';
 import { renderFeedbackPage, initializeFeedbackUI, ensureFeedbackLoaded } from './feedback-ui.js';
 import { isMobile, renderMobileNav, enhanceMobileTables, renderMobileSeatList, openMaterialPreview, openSeatMapViewer, shareOrDownloadFile, installMobileEnhancements } from './mobile.js';
 
@@ -22,6 +22,7 @@ state.generatedRevision ||= 0;
 let section = ['agent', 'meeting', 'news', 'documents', 'knowledge', 'feedback'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'agent';
 let tab = 'people', newsFilter = '全部', knowledgeFilter = '全部', search = '', mobileOpen = false;
 let toastTimer, run = null, busy = false;
+let agentGoalDraft = null;
 let drawerReturnFocus = null;
 const sectionNames = { agent: '智能体工作台', meeting: '会务助手', news: '政务信息助手', documents: '公文助手', knowledge: '综合知识库', feedback: '反馈列表' };
 const checklistItems = ['确认会议时间与地点', '收集参会人员信息', '核对主客排序与座次', '准备会议材料与名签', '检查投屏及现场设备'];
@@ -72,6 +73,22 @@ const confirmed = () => state.meeting.confirmedRevision === state.meeting.revisi
 const ready = () => confirmed() && state.generatedRevision === state.meeting.revision;
 const meetingSignature = () => JSON.stringify(['title','date','time','location','host','topic'].map(key=>state.meeting[key]));
 function settings() { let s = {}; try { s = JSON.parse(localStorage.getItem('zhixing-model') || '{}'); s.token = sessionStorage.getItem('zhixing-access') || ''; } catch {} return s; }
+function modelSettingsLabel(s = settings()) {
+  if (!s.endpoint) return '规则演示模式';
+  if (!s.token?.trim()) return '待填写模型口令';
+  if (!s.consent) return '待确认数据授权';
+  return '模型连接设置';
+}
+function requireModelSettings(s = settings()) {
+  if (!s.endpoint) return;
+  try {
+    validateModelToken(s.token);
+    if (!s.consent) throw new Error('请先在「模型与数据设置」确认允许发送业务上下文。');
+  } catch (error) {
+    settingsModal();
+    throw error;
+  }
+}
 function syncMobileDrawer() {
   const mobile = isMobile();
   if (!mobile) mobileOpen = false;
@@ -111,7 +128,7 @@ function go(next, nextTab) { section = next; if (nextTab) tab = nextTab; mobileO
 function render() {
   document.title = `${sectionNames[section]} · 知行`;
   const nav = (id, name, g, suffix = '') => `<button class="nav-item ${section === id ? 'active' : ''}" data-action="nav" data-section="${id}">${icon(g)}<span>${name}</span>${suffix}</button>`;
-  $('#app').innerHTML = `<div class="shell"><div class="mobile-overlay ${mobileOpen ? 'open' : ''}" data-action="mobile" aria-hidden="true"></div><aside id="mobile-more-drawer" class="sidebar ${mobileOpen ? 'mobile-open' : ''}" aria-label="更多功能"><button type="button" class="mobile-drawer-close" data-action="mobile" aria-label="关闭更多功能">${icon('close')}</button><div class="brand"><img src="./assets/logo.svg" alt="知行标志"><div><strong>知行</strong><small>综合管理 AI 智能助手</small></div></div><div class="nav-label">WORKSPACE</div>${nav('agent', '智能体工作台', 'spark')}<div class="nav-label" style="margin-top:13px">业务工具</div>${nav('meeting', '会务助手', 'calendar', '<small>核心</small>')}${nav('news', '政务信息助手', 'news')}${nav('documents', '公文助手', 'file')}${nav('knowledge', '综合知识库', 'book')}${nav('feedback', '反馈列表', 'message', '<small>临时</small>')}<div class="sidebar-bottom"><div class="nav-divider"></div><button class="nav-item" data-action="guide">${icon('play')}<span>参赛演示指南</span></button><button class="nav-item" data-action="settings">${icon('settings')}<span>模型与数据设置</span></button><div class="local-note"><span><i class="dot"></i>浏览器本地保存</span>演示数据 · 仅当前设备可见</div><div class="user"><div class="avatar">综</div><div><strong>综合管理部</strong><small>经营管理赛道 · 参赛演示</small></div></div></div></aside><main class="main"><header class="topbar"><button class="mobile-menu" data-action="mobile" aria-label="打开更多功能" aria-controls="mobile-more-drawer" aria-expanded="${mobileOpen}">${icon('menu')}<b>知行</b></button><div class="breadcrumbs">经营管理工作空间 ${icon('chevron')}<b>${sectionNames[section]}</b></div><div class="top-actions"><span class="top-date">${new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' })}</span><button class="mode-pill" data-action="settings">${icon('spark')}${settings().endpoint ? '模型接口已配置' : '规则演示模式'}</button><button class="btn ghost small" data-action="guide">${icon('info')}使用指南</button></div></header><div class="page page-fade">${section === 'agent' ? renderAgent() : section === 'meeting' ? renderMeeting() : section === 'news' ? renderNews() : section === 'documents' ? renderDocuments() : section === 'feedback' ? renderFeedbackPage() : renderKnowledge()}<footer class="footnote"><span>${icon('shield')}所有预置人物与业务内容均为虚构演示。实际业务结果需人工审核。</span><span>知行 · 让经营管理更高效</span></footer></div><button type="button" class="feedback-entry" data-feedback-action="open" aria-haspopup="dialog">${icon('message')}<span>提交反馈</span></button></main>${renderMobileNav(section,mobileOpen)}</div>`;
+  $('#app').innerHTML = `<div class="shell"><div class="mobile-overlay ${mobileOpen ? 'open' : ''}" data-action="mobile" aria-hidden="true"></div><aside id="mobile-more-drawer" class="sidebar ${mobileOpen ? 'mobile-open' : ''}" aria-label="更多功能"><button type="button" class="mobile-drawer-close" data-action="mobile" aria-label="关闭更多功能">${icon('close')}</button><div class="brand"><img src="./assets/logo.svg" alt="知行标志"><div><strong>知行</strong><small>综合管理 AI 智能助手</small></div></div><div class="nav-label">WORKSPACE</div>${nav('agent', '智能体工作台', 'spark')}<div class="nav-label" style="margin-top:13px">业务工具</div>${nav('meeting', '会务助手', 'calendar', '<small>核心</small>')}${nav('news', '政务信息助手', 'news')}${nav('documents', '公文助手', 'file')}${nav('knowledge', '综合知识库', 'book')}${nav('feedback', '反馈列表', 'message', '<small>临时</small>')}<div class="sidebar-bottom"><div class="nav-divider"></div><button class="nav-item" data-action="guide">${icon('play')}<span>参赛演示指南</span></button><button class="nav-item" data-action="settings">${icon('settings')}<span>模型与数据设置</span></button><div class="local-note"><span><i class="dot"></i>浏览器本地保存</span>演示数据 · 仅当前设备可见</div><div class="user"><div class="avatar">综</div><div><strong>综合管理部</strong><small>经营管理赛道 · 参赛演示</small></div></div></div></aside><main class="main"><header class="topbar"><button class="mobile-menu" data-action="mobile" aria-label="打开更多功能" aria-controls="mobile-more-drawer" aria-expanded="${mobileOpen}">${icon('menu')}<b>知行</b></button><div class="breadcrumbs">经营管理工作空间 ${icon('chevron')}<b>${sectionNames[section]}</b></div><div class="top-actions"><span class="top-date">${new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' })}</span><button class="mode-pill" data-action="settings">${icon('spark')}${modelSettingsLabel()}</button><button class="btn ghost small" data-action="guide">${icon('info')}使用指南</button></div></header><div class="page page-fade">${section === 'agent' ? renderAgent() : section === 'meeting' ? renderMeeting() : section === 'news' ? renderNews() : section === 'documents' ? renderDocuments() : section === 'feedback' ? renderFeedbackPage() : renderKnowledge()}<footer class="footnote"><span>${icon('shield')}所有预置人物与业务内容均为虚构演示。实际业务结果需人工审核。</span><span>知行 · 让经营管理更高效</span></footer></div><button type="button" class="feedback-entry" data-feedback-action="open" aria-haspopup="dialog">${icon('message')}<span>提交反馈</span></button></main>${renderMobileNav(section,mobileOpen)}</div>`;
   enhanceMobileTables(document);
   syncMobileDrawer();
   if(section==='feedback')void ensureFeedbackLoaded();
@@ -121,7 +138,7 @@ function renderAgent() {
   const completed = run?.steps.filter(s => s.status === 'done').length || 0;
   const baseline = state.baseline || 60;
   const minutes = run?.finishedAt ? Math.max(1, Math.round((run.finishedAt - run.startedAt) / 1000)) : null;
-  return `${pageHeading('经营管理智能体', '一句话发起任务，工具协同执行，关键环节由你确认。', btn(`${icon('play')}演示路线`, 'guide'))}<div class="agent-layout"><div><section class="agent-compose"><div class="agent-compose-heading"><div class="agent-mark">${icon('spark')}</div><div><h2>今天，想高效完成哪项工作？</h2><p>从筹备会议开始，把名单、材料和会后跟进串成一条业务流程。</p></div><span class="agent-version">AGENT / 01</span></div><label class="sr-only" for="agent-goal">描述业务任务</label><textarea id="agent-goal" rows="3" placeholder="例如：为下周的经营管理交流会准备参会名单、议程、手册、名签和座位图。">${esc(run?.goal || '为经营管理交流会整理参会名单，按职级和主客顺序排序，再准备议程、手册、名签和座位图。')}</textarea><div class="agent-compose-bottom"><span>${icon('link')}已关联当前会议 · ${state.participants.length} 位参会人员</span>${btn(`${icon('spark')}${busy ? '正在规划…' : '开始执行任务'}`, 'agent-start', 'primary', busy || run?.waiting ? 'disabled' : '')}</div></section><div class="quick-tasks"><button data-action="preset" data-kind="meeting">${icon('calendar')}筹备会议材料${icon('arrow')}</button><button data-action="preset" data-kind="minutes">${icon('file')}整理纪要与督办${icon('arrow')}</button><button data-action="nav" data-section="news">${icon('news')}编审今日要闻${icon('arrow')}</button></div><section class="panel execution-panel"><div class="toolbar"><div><h3>任务执行过程</h3><p>${run ? `${run.mode === 'deepseek' ? 'DeepSeek 规划 · 本地工具执行' : '规则规划演示 · 本地工具执行'} · ${completed}/${run.steps.length} 步已完成` : '规划、调用、确认、交付，每一步都有迹可循'}</p></div>${run ? badge(run.finishedAt ? '已完成' : run.waiting ? '等待人工确认' : '执行中', run.finishedAt ? 'green' : 'blue') : badge('等待任务', 'gray')}</div>${run ? `<div class="execution-summary">${esc(run.finishedAt ? '已完成本次工具计划。具体执行结果及人工确认记录见下方。' : run.summary)}</div><div class="execution-steps">${run.steps.map((s, i) => `<div class="execution-step ${s.status}"><div class="execution-index">${s.status === 'done' ? icon('check') : String(i + 1).padStart(2, '0')}</div><div class="execution-body"><h4>${esc(s.label)}<code>${esc(s.tool)}</code></h4><p>${esc(s.result || s.reason)}</p>${s.status === 'waiting' ? `<div class="agent-confirm"><p>${s.tool === 'generate_materials' ? `已排好 ${state.participants.length} 位参会人员。请打开名单核对职级、主客及座次；确认后继续生成。` : '纪要草稿已生成。请在会务助手中审核原始记录、纪要和行动项，再继续录入督办。'}</p><div class="actions-line">${btn('打开并审核', 'agent-review', 'primary small')}${btn('取消本次任务', 'agent-cancel', 'small')}</div></div>` : ''}</div></div>`).join('')}</div>${run.finishedAt ? `<div class="execution-delivery">${icon('check')}<div><strong>任务已完成，业务成果可以继续编辑和导出</strong><span>运行记录已保存在当前浏览器</span></div>${btn('查看成果', 'agent-result', 'light small')}</div>` : ''}` : `<div class="agent-idle"><div class="idle-diagram"><span>${icon('spark')}理解目标</span><i></i><span>${icon('grid')}调用工具</span><i></i><span>${icon('check')}人工确认</span><i></i><span>${icon('file')}交付成果</span></div><p>试着发起第一个任务。智能体会先给出执行计划，<br>在名单和纪要确认后继续完成后续工作。</p></div>`}</section></div><aside class="agent-aside"><section class="panel side-panel"><h3>本次任务上下文 ${icon('book')}</h3><div class="context-meeting">${icon('calendar')}<h4>${esc(state.meeting.title)}</h4></div><p class="context-date">${esc(state.meeting.date)} · ${esc(state.meeting.time)}</p><div class="context-row"><span>参会名单</span><b>${state.participants.length} 人</b></div><div class="context-row"><span>业务模板</span><b>${state.knowledge.filter(k => k.type === '模板').length} 份</b></div><div class="context-row"><span>名单版本</span><b>V${state.meeting.revision}</b></div><div class="context-row"><span>人工确认</span>${badge(confirmed() ? '已确认' : '待确认', confirmed() ? 'green' : 'amber')}</div>${btn('管理会议与人员', 'open-meeting', 'small context-button')}</section><section class="panel side-panel efficiency"><h3>让提效可以衡量 ${icon('clock')}</h3><label for="baseline">人工完成同类任务的预计耗时</label><div class="baseline-input"><input id="baseline" type="number" min="1" max="10000" value="${baseline}" aria-label="人工基线分钟"><span>分钟</span></div>${minutes ? `<div class="efficiency-result"><span>本次完整演示用时（含确认）</span><b>${minutes}<small>秒</small></b></div>` : '<div class="efficiency-placeholder">完成一次任务后<br>记录本次演示用时</div>'}<p class="note-caption">基线由你估算，默认 60 分钟；演示耗时不能等同真实业务节省。建议试点时以相同规模任务进行前后对照。</p></section><div class="agent-capability"><span>${icon('shield')}关键决策始终由人确认</span><p>自动处理重复工作<br>人工把握业务判断</p></div></aside></div>`;
+  return `${pageHeading('经营管理智能体', '一句话发起任务，工具协同执行，关键环节由你确认。', btn(`${icon('play')}演示路线`, 'guide'))}<div class="agent-layout"><div><section class="agent-compose"><div class="agent-compose-heading"><div class="agent-mark">${icon('spark')}</div><div><h2>今天，想高效完成哪项工作？</h2><p>从筹备会议开始，把名单、材料和会后跟进串成一条业务流程。</p></div><span class="agent-version">AGENT / 01</span></div><label class="sr-only" for="agent-goal">描述业务任务</label><textarea id="agent-goal" rows="3" placeholder="例如：为下周的经营管理交流会准备参会名单、议程、手册、名签和座位图。">${esc(agentGoalDraft ?? run?.goal ?? '为经营管理交流会整理参会名单，按职级和主客顺序排序，再准备议程、手册、名签和座位图。')}</textarea><div class="agent-compose-bottom"><span>${icon('link')}已关联当前会议 · ${state.participants.length} 位参会人员</span>${btn(`${icon('spark')}${busy ? '正在规划…' : '开始执行任务'}`, 'agent-start', 'primary', busy || run?.waiting ? 'disabled' : '')}</div></section><div class="quick-tasks"><button data-action="preset" data-kind="meeting">${icon('calendar')}筹备会议材料${icon('arrow')}</button><button data-action="preset" data-kind="minutes">${icon('file')}整理纪要与督办${icon('arrow')}</button><button data-action="nav" data-section="news">${icon('news')}编审今日要闻${icon('arrow')}</button></div><section class="panel execution-panel"><div class="toolbar"><div><h3>任务执行过程</h3><p>${run ? `${run.mode === 'deepseek' ? 'DeepSeek 规划 · 本地工具执行' : '规则规划演示 · 本地工具执行'} · ${completed}/${run.steps.length} 步已完成` : '规划、调用、确认、交付，每一步都有迹可循'}</p></div>${run ? badge(run.finishedAt ? '已完成' : run.waiting ? '等待人工确认' : '执行中', run.finishedAt ? 'green' : 'blue') : badge('等待任务', 'gray')}</div>${run ? `<div class="execution-summary">${esc(run.finishedAt ? '已完成本次工具计划。具体执行结果及人工确认记录见下方。' : run.summary)}</div><div class="execution-steps">${run.steps.map((s, i) => `<div class="execution-step ${s.status}"><div class="execution-index">${s.status === 'done' ? icon('check') : String(i + 1).padStart(2, '0')}</div><div class="execution-body"><h4>${esc(s.label)}<code>${esc(s.tool)}</code></h4><p>${esc(s.result || s.reason)}</p>${s.status === 'waiting' ? `<div class="agent-confirm"><p>${s.tool === 'generate_materials' ? `已排好 ${state.participants.length} 位参会人员。请打开名单核对职级、主客及座次；确认后继续生成。` : '纪要草稿已生成。请在会务助手中审核原始记录、纪要和行动项，再继续录入督办。'}</p><div class="actions-line">${btn('打开并审核', 'agent-review', 'primary small')}${btn('取消本次任务', 'agent-cancel', 'small')}</div></div>` : ''}</div></div>`).join('')}</div>${run.finishedAt ? `<div class="execution-delivery">${icon('check')}<div><strong>任务已完成，业务成果可以继续编辑和导出</strong><span>运行记录已保存在当前浏览器</span></div>${btn('查看成果', 'agent-result', 'light small')}</div>` : ''}` : `<div class="agent-idle"><div class="idle-diagram"><span>${icon('spark')}理解目标</span><i></i><span>${icon('grid')}调用工具</span><i></i><span>${icon('check')}人工确认</span><i></i><span>${icon('file')}交付成果</span></div><p>试着发起第一个任务。智能体会先给出执行计划，<br>在名单和纪要确认后继续完成后续工作。</p></div>`}</section></div><aside class="agent-aside"><section class="panel side-panel"><h3>本次任务上下文 ${icon('book')}</h3><div class="context-meeting">${icon('calendar')}<h4>${esc(state.meeting.title)}</h4></div><p class="context-date">${esc(state.meeting.date)} · ${esc(state.meeting.time)}</p><div class="context-row"><span>参会名单</span><b>${state.participants.length} 人</b></div><div class="context-row"><span>业务模板</span><b>${state.knowledge.filter(k => k.type === '模板').length} 份</b></div><div class="context-row"><span>名单版本</span><b>V${state.meeting.revision}</b></div><div class="context-row"><span>人工确认</span>${badge(confirmed() ? '已确认' : '待确认', confirmed() ? 'green' : 'amber')}</div>${btn('管理会议与人员', 'open-meeting', 'small context-button')}</section><section class="panel side-panel efficiency"><h3>让提效可以衡量 ${icon('clock')}</h3><label for="baseline">人工完成同类任务的预计耗时</label><div class="baseline-input"><input id="baseline" type="number" min="1" max="10000" value="${baseline}" aria-label="人工基线分钟"><span>分钟</span></div>${minutes ? `<div class="efficiency-result"><span>本次完整演示用时（含确认）</span><b>${minutes}<small>秒</small></b></div>` : '<div class="efficiency-placeholder">完成一次任务后<br>记录本次演示用时</div>'}<p class="note-caption">基线由你估算，默认 60 分钟；演示耗时不能等同真实业务节省。建议试点时以相同规模任务进行前后对照。</p></section><div class="agent-capability"><span>${icon('shield')}关键决策始终由人确认</span><p>自动处理重复工作<br>人工把握业务判断</p></div></aside></div>`;
 }
 function renderMeeting() {
   const m = state.meeting;
@@ -192,7 +209,7 @@ function knowledgeModal(id) {
 }
 function settingsModal() {
   const s = settings();
-  modal('模型与数据设置','默认无需配置即可体验规则演示。真实模型通过独立服务端调用。',`<div class="notice blue">${icon('shield')}GitHub Pages 仅托管静态网页。DeepSeek API Key 必须配置在服务端，不能填入网页或提交仓库。</div><div class="field" style="margin-top:20px"><label for="model-endpoint">你的服务端接口</label><input id="model-endpoint" name="endpoint" type="url" value="${esc(s.endpoint||DEFAULT_ENDPOINT)}" placeholder="https://你的服务地址/api/generate"><p class="hint">留空使用规则演示。只连接你信任的服务端；模型请求会发送当前任务及相关业务文本。</p></div><div class="field"><label for="model-token">演示访问口令（服务端 DEMO_ACCESS_TOKEN）</label><input id="model-token" name="token" type="password" autocomplete="off" value="${esc(s.token||'')}" placeholder="服务端访问口令，不是 DeepSeek API Key"><p class="hint">口令仅保存在当前浏览器会话。服务器部署说明见仓库 README。</p></div><label class="checkbox-label"><input type="checkbox" name="consent" ${s.consent?'checked':''}>我确认这是受信任的接口，允许发送任务、必要名单字段及业务文本给模型处理。</label><div class="section-heading"><h3>本地演示数据</h3></div><p class="note-caption">重置将清除当前浏览器的名单、资料、草稿与督办记录，恢复虚构示例。</p>${btn('重置为演示数据','reset-dialog','danger small','type="button"')}`,'settings-form',cancel()+submit('保存设置'));
+  modal('模型与数据设置','默认无需配置即可体验规则演示。真实模型通过独立服务端调用。',`<div class="notice blue">${icon('shield')}GitHub Pages 仅托管静态网页。DeepSeek API Key 必须配置在服务端，不能填入网页或提交仓库。</div><div class="field" style="margin-top:20px"><label for="model-endpoint">你的服务端接口</label><input id="model-endpoint" name="endpoint" type="url" value="${esc(s.endpoint||DEFAULT_ENDPOINT)}" placeholder="https://你的服务地址/api/generate"><p class="hint">留空使用规则演示。只连接你信任的服务端；模型请求会发送当前任务及相关业务文本。</p></div><div class="field"><label for="model-token">模型访问口令</label><input id="model-token" name="token" type="password" autocomplete="off" value="${esc(s.token||'')}" placeholder="填写项目维护者提供的模型访问口令"><p class="hint">口令由项目维护者提供，与反馈管理口令不同；仅保存在当前标签页会话。保存设置不会验证连接。请勿填写 GitHub 令牌或 DeepSeek API Key。</p></div><label class="checkbox-label"><input type="checkbox" name="consent" ${s.consent?'checked':''}>我确认这是受信任的接口，允许发送任务、必要名单字段及业务文本给模型处理。</label><div class="section-heading"><h3>本地演示数据</h3></div><p class="note-caption">重置将清除当前浏览器的名单、资料、草稿与督办记录，恢复虚构示例。</p>${btn('重置为演示数据','reset-dialog','danger small','type="button"')}`,'settings-form',cancel()+submit('保存设置'));
 }
 function guideModal() {
   modal('用 5 分钟讲清楚业务价值','经营管理赛道 · 以可执行的任务流程展示降本增效',`<div class="guide-steps">${[['发起一项真实业务任务','在智能体工作台输入“准备本次会议全部材料”。观察计划、工具名称和每一步执行结果。'],['在关键节点做人工确认','智能体自动整理名单，暂停等待人工核对。在会务助手确认排序后，继续生成五类材料。'],['展示人员变更的联动效果','修改一位参会人员的职务，旧确认和材料自动失效。重新确认并生成，名单、名签和座位图保持一致。'],['从会议记录走到督办','切换纪要任务，整理原文、查看行动项依据，补充负责人和期限，审核后录入督办。'],['说明提效如何验证','记录演示用时；试点时采集同等规模任务的人工基线、总耗时、返工次数和材料一致性，形成可验证对比。']].map(([t,d],i)=>`<div class="guide-step"><span>${i+1}</span><div><h4>${t}</h4><p>${d}</p></div></div>`).join('')}</div><div class="notice amber">默认是规则编排演示。接入服务端后由 DeepSeek 选择工具，前端执行已限定的业务动作。未实现企业审批、石化通、会议室和文档库接口，演示数据不能作为真实降本结果。</div>`, '',btn('开始会务任务','guide-start','primary'),true);
@@ -200,8 +217,8 @@ function guideModal() {
 async function generateText(task,input) {
   const s=settings();
   if (!s.endpoint) return null;
-  if (!s.consent) throw new Error('请先在模型设置中确认数据发送范围。');
-  const response = await fetch(s.endpoint,{method:'POST',headers:{'Content-Type':'application/json',...(s.token?{Authorization:`Bearer ${s.token}`}:{})},body:JSON.stringify({task,input,context:{meeting:state.meeting,template:state.doc.template}}),signal:AbortSignal.timeout(65000),credentials:'omit'});
+  requireModelSettings(s);
+  const response = await fetch(s.endpoint,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${validateModelToken(s.token)}`},body:JSON.stringify({task,input,context:{meeting:state.meeting,template:state.doc.template}}),signal:AbortSignal.timeout(65000),credentials:'omit'});
   let result; try {result=await response.json();}catch{throw new Error('模型服务没有返回有效 JSON，请检查服务端地址。');}
   if(!response.ok)throw new Error(result.error?.message||'模型请求失败，请检查服务端配置。');
   if(!result.text||result.mode!=='deepseek')throw new Error('模型结果格式不正确，未更新业务数据。');
@@ -230,14 +247,15 @@ function reviewMinutes() {
 function generateMaterials() {if(!confirmed())throw new Error('请先人工确认名单与排序。');state.generatedRevision=state.meeting.revision;log(`生成 V${state.meeting.revision} 五类会务材料`);save();}
 async function startAgent() {
   if(busy || run?.waiting)return;
-  const goal=$('#agent-goal')?.value.trim()||'';
+  agentGoalDraft=$('#agent-goal')?.value||'';
+  const goal=agentGoalDraft.trim();
   if(!goal)throw new Error('请先描述要完成的业务任务。');
+  const s=settings();
+  requireModelSettings(s);
   const startedAt=Date.now();
   busy=true;render();
   try{
     const planState=state,planRevision=state.meeting.revision;
-    const s=settings();
-    if(s.endpoint&&!s.consent)throw new Error('请先在模型设置中确认允许发送业务上下文。');
     const plan=s.endpoint?await requestAgentPlan(goal,state,s):getDemoPlan(goal,state);
     if(state!==planState || planRevision!==state.meeting.revision)throw new Error('任务背景在规划期间已变化，请重新发起任务。');
     run={...plan,goal,steps:plan.steps.map(s=>({...s,status:'pending'})),startedAt,finishedAt:null,waiting:null,index:0};
@@ -337,10 +355,10 @@ document.addEventListener('click',async event=>{
     else if(a==='guide')guideModal();
     else if(a==='guide-start'){$('#modal').close();go('agent');}
     else if(a==='reset-dialog')modal('重置当前浏览器的演示数据','将清除当前名单、资料、草稿和督办事项，恢复虚构示例。','','',cancel()+btn('确认重置','reset-confirm','danger'));
-    else if(a==='reset-confirm'){state=createInitialState();state.checklist=[true,true,false,false,false];state.doc={template:'会议纪要',input:'',output:'',reviewed:false};state.generatedRevision=0;run=null;busy=false;save();$('#modal').close();go('agent');toast('已恢复演示数据。');}
+    else if(a==='reset-confirm'){state=createInitialState();state.checklist=[true,true,false,false,false];state.doc={template:'会议纪要',input:'',output:'',reviewed:false};state.generatedRevision=0;run=null;agentGoalDraft=null;busy=false;save();$('#modal').close();go('agent');toast('已恢复演示数据。');}
     else if(a==='open-meeting')go('meeting','people');
     else if(a==='open-agent')go('agent');
-    else if(a==='preset'){$('#agent-goal').value=el.dataset.kind==='minutes'?'请整理当前会议记录为纪要，提取待办，审核后录入督办。':'请整理本次会议名单，按职级和主客排序，再准备全部会务材料。';$('#agent-goal').focus();}
+    else if(a==='preset'){$('#agent-goal').value=el.dataset.kind==='minutes'?'请整理当前会议记录为纪要，提取待办，审核后录入督办。':'请整理本次会议名单，按职级和主客排序，再准备全部会务材料。';agentGoalDraft=$('#agent-goal').value;$('#agent-goal').focus();}
     else if(a==='agent-start')await startAgent();
     else if(a==='agent-review')go('meeting',run?.waiting==='generate_materials'?'people':'minutes');
     else if(a==='agent-cancel'){run=null;busy=false;render();toast('本次编排已取消，已完成的业务修改仍保留。');}
@@ -382,8 +400,8 @@ document.addEventListener('submit',event=>{
       const k={id:text('id')||uid('knowledge'),title:text('title'),type:text('type'),updatedAt:day(),tags:text('tags').split(/[,，]/).map(s=>s.trim()).filter(Boolean),content:text('content'),authorized:f.has('authorized')};const i=state.knowledge.findIndex(k=>k.id===text('id'));if(i>=0)state.knowledge[i]=k;else state.knowledge.unshift(k);save();
     }else if(form.id==='settings-form'){
       const endpoint=text('endpoint');if(endpoint){const u=new URL(endpoint);if(!safeURL(endpoint)||!u.pathname.endsWith('/api/generate'))throw new Error('接口地址应以 /api/generate 结尾。');if(u.username||u.password||u.search||u.hash)throw new Error('接口地址不能包含账号、口令、查询参数或片段。');if(u.protocol!=='https:'&&!['localhost','127.0.0.1','[::1]'].includes(u.hostname))throw new Error('远程接口必须使用 HTTPS。');if(!f.has('consent'))throw new Error('请确认允许向该服务端发送必要业务上下文。');}
-      if(/^sk-/.test(text('token')))throw new Error('这里填写服务访问口令，不是 DeepSeek API Key。API Key 只能放在服务端。');
-      localStorage.setItem('zhixing-model',JSON.stringify({endpoint,consent:f.has('consent')}));sessionStorage.setItem('zhixing-access',text('token'));
+      const token=validateModelToken(text('token'),{required:Boolean(endpoint)});
+      localStorage.setItem('zhixing-model',JSON.stringify({endpoint,consent:f.has('consent')}));sessionStorage.setItem('zhixing-access',token);
     }
     $('#modal').close();render();toast('已保存。');
   }catch(error){toast(error.message);}
@@ -398,6 +416,7 @@ function syncReviewControls() {
 }
 document.addEventListener('input',event=>{
   const el=event.target;
+  if(el.id==='agent-goal')agentGoalDraft=el.value;
   if(el.id==='knowledge-search'){search=el.value;if(event.isComposing)return;const pos=el.selectionStart;render();const input=$('#knowledge-search');input.focus();input.setSelectionRange(pos,pos);return;}
   if(el.id==='minutes-input'){state.minutes.input=el.value;state.minutes.reviewed=false;}
   if(el.id==='minutes-output'){state.minutes.output=el.value;state.minutes.reviewed=false;}

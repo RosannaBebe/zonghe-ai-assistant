@@ -141,14 +141,22 @@ function basicContext(state = {}) {
   return { meeting, participants, hasMinutes };
 }
 
+/** Validates the project-issued relay password, not provider or GitHub credentials. */
+export function validateModelToken(value, { required = true } = {}) {
+  const token = typeof value === 'string' ? value.trim() : '';
+  if (!token && required) throw new Error('请先在「模型与数据设置」填写模型访问口令，口令由项目维护者提供。');
+  if (/^(?:github_pat_|ghp_)/i.test(token)) throw new Error('这里需要项目维护者提供的模型访问口令，不能填写 GitHub 令牌。');
+  if (/^sk-/i.test(token)) throw new Error('这里需要项目维护者提供的模型访问口令，不能填写 DeepSeek API Key；API Key 只能配置在服务端。');
+  return token;
+}
+
 /** Calls the enterprise relay, never the model provider or a browser API key. */
 export async function requestAgentPlan(goal, state = {}, settings = {}) {
   const text = readGoal(goal);
   const endpoint = agentEndpoint(settings.endpoint);
   const headers = { 'Content-Type': 'application/json' };
-  const token = typeof settings.token === 'string' ? settings.token.trim() : '';
-  if (/^sk-/i.test(token)) throw new Error('此处填写企业转发服务的访问口令；请将 DeepSeek API Key 配置到服务端。');
-  if (token) headers.Authorization = `Bearer ${token}`;
+  const token = validateModelToken(settings.token);
+  headers.Authorization = `Bearer ${token}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
