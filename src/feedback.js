@@ -1,6 +1,8 @@
+import { ServiceConnectionError, waitForService } from './service-connection.js';
+
 /** Shared feedback client. Content remains plain text; never interpret it as HTML. */
 export const FEEDBACK_ENDPOINT = 'https://zhixing-agent-gateway.rosannabebe.chatgpt.site/api/feedback';
-export const FEEDBACK_TICKET_ENDPOINT = 'https://zhixing-agent-gateway.rosannabebe.chatgpt.site/api/feedback-ticket';
+export const FEEDBACK_TICKET_ENDPOINT = new URL('feedback-ticket', FEEDBACK_ENDPOINT).href;
 export const FEEDBACK_MAX_LENGTH = 1000;
 
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -209,6 +211,22 @@ function normalizeTicket(result) {
   return ticket;
 }
 
+async function waitForFeedbackConnection(options) {
+  try {
+    await waitForService(FEEDBACK_ENDPOINT, {
+      signal: options.signal, onStatus: options.onStatus, fetchImpl: options.fetchImpl,
+      timeoutMs: options.connectionTimeoutMs,
+      pollIntervalMs: options.connectionPollIntervalMs,
+      requestTimeoutMs: options.connectionRequestTimeoutMs,
+    });
+  } catch (error) {
+    if (error instanceof ServiceConnectionError) {
+      throw new FeedbackError(error.code, error.message, { retryable: error.code !== 'CONNECTION_CANCELLED' });
+    }
+    throw error;
+  }
+}
+
 /**
  * Public ticket GET → ticket-authenticated POST. Never forwards options.token.
  * Returns { item, duplicate, requestId }; retries reuse the UUID and get a new ticket.
@@ -217,6 +235,7 @@ export async function submitFeedback(payload, options = {}) {
   const body = createFeedbackPayload(payload);
   const publicOptions = { signal: options.signal, timeoutMs: options.timeoutMs, fetchImpl: options.fetchImpl };
   try {
+    await waitForFeedbackConnection(options);
     // Only the validated UUID is included in this URL; content stays in the POST.
     const ticketResult = await requestFeedback('GET', `${FEEDBACK_TICKET_ENDPOINT}?requestId=${encodeURIComponent(body.requestId)}`, null, publicOptions);
     const ticket = normalizeTicket(ticketResult);
@@ -234,6 +253,7 @@ export async function submitFeedback(payload, options = {}) {
  */
 export async function listFeedback({ page = 1, ...options } = {}) {
   if (!Number.isSafeInteger(page) || page < 1) throw new FeedbackError('INVALID_PAGE', '反馈页码无效，请从第一页重新加载。');
+  await waitForFeedbackConnection(options);
   const result = await requestFeedback('GET', `${FEEDBACK_ENDPOINT}?page=${page}`, null, options);
   if (!Array.isArray(result.items) || result.items.length > 100 || typeof result.hasMore !== 'boolean') throw invalidResponse();
   if (result.hasMore && (!Number.isSafeInteger(result.nextPage) || result.nextPage <= page)) throw invalidResponse();

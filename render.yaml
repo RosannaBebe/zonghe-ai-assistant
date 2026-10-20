@@ -1,0 +1,38 @@
+# Deploy the independent backend. GitHub Pages continues to host the frontend.
+services:
+  - type: web
+    name: zhixing-agent-gateway
+    runtime: node
+    plan: free
+    region: singapore
+    repo: https://github.com/RosannaBebe/zonghe-ai-assistant
+    branch: main
+    rootDir: server/cloud
+    buildCommand: node --check adapter.mjs
+    startCommand: node adapter.mjs
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: HOST
+        value: 0.0.0.0
+      # Only enable on this Free public service, behind Render's Cloudflare edge.
+      - key: TRUST_RENDER_EDGE
+        value: "true"
+      - key: ALLOWED_ORIGIN
+        value: https://rosannabebe.github.io
+      - key: DEEPSEEK_MODEL
+        value: deepseek-chat
+      - key: FEEDBACK_REPOSITORY
+        value: RosannaBebe/zonghe-ai-feedback
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEMO_ACCESS_TOKEN
+        sync: false
+      - key: FEEDBACK_GITHUB_TOKEN
+        sync: false
+      - key: FEEDBACK_ADMIN_TOKEN
+        sync: false
+      - key: FEEDBACK_SIGNING_SECRET
+        generateValue: true

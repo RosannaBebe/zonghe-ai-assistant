@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import * as domain from '../src/domain.js';
 import * as exportsModule from '../src/exports.js';
 import * as agent from '../src/agent.js';
+import * as serviceConnection from '../src/service-connection.js';
 
 const appPath = new URL('../src/app.js', import.meta.url);
 const appSource = readFileSync(appPath, 'utf8').replace(/^import [^\n]*;\r?\n/gm, '');
@@ -86,7 +87,7 @@ function createApp() {
   };
   for (const id of ['app', 'modal', 'toast', 'csv-file', 'text-file']) nodes.set(`#${id}`, makeNode({ id }));
   const context = vm.createContext({
-    ...domain, ...exportsModule, ...agent,
+    ...domain, ...exportsModule, ...agent, ...serviceConnection,
     requestAgentPlan: async (...args) => { agentCalls.push(args); throw new Error('Unexpected model planning request in an isolated app test.'); },
     isMobile: () => false,
     renderMobileNav: () => '', enhanceMobileTables() {}, installMobileEnhancements() {},
@@ -176,6 +177,32 @@ test('a late model response cannot overwrite data after the user resets the work
   await Promise.allSettled([pending]);
   assert.equal(JSON.stringify(app.state.minutes), freshMinutes);
   assert.equal(app.state.tasks.length, 0);
+});
+
+test('Render generation waits without credentials and retains its starting context while the user edits', async () => {
+  const app = createApp();
+  const calls = [];
+  let releaseHealth;
+  const health = new Promise((resolve) => { releaseHealth = resolve; });
+  const startingTitle = app.state.meeting.title;
+  app.connect(async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith('/health')) return health;
+    return { ok: true, json: async () => ({ mode: 'deepseek', text: '等待前会议的纪要草稿。' }) };
+  }, { endpoint: 'https://internal-demo.onrender.com/api/generate' });
+  const pending = app.api.makeMinutes();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.method, 'GET');
+  assert.equal(calls[0].options.headers.Authorization, undefined);
+  assert.equal(calls[0].options.body, undefined);
+  assert.match(app.nodes.get('#app').innerHTML, /正在连接服务，首次可能约一分钟/);
+  app.state.meeting.title = '连接等待期间的新会议';
+  releaseHealth({ ok: true, json: async () => ({ ok: true }) });
+  await assert.rejects(pending, /数据在生成期间已变化/);
+  assert.deepEqual(calls.map(({ options }) => options.method), ['GET', 'POST']);
+  assert.equal(JSON.parse(calls[1].options.body).context.meeting.title, startingTitle);
+  assert.equal(calls[1].options.headers.Authorization, 'Bearer test-model-access-token');
+  assert.doesNotMatch(app.nodes.get('#app').innerHTML, /正在连接服务，首次可能约一分钟/);
 });
 
 test('modal titles and subtitles render imported names as text while retaining trusted body markup', () => {

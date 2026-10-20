@@ -100,9 +100,9 @@ function createFeedbackUI({ page = 'feedback', storedToken = '' } = {}) {
     esc: feedbackClient.escapeFeedbackHTML,
     document, console, Date, Intl, URL, Map, AbortController,
     sessionStorage: { getItem: (key) => session.get(key) || null, setItem: (key, value) => session.set(key, value), removeItem: (key) => session.delete(key) },
-    submitFeedback: async (payload) => {
+    submitFeedback: async (payload, options) => {
       submissions.push(structuredClone(payload));
-      return await submitHandler(payload);
+      return await submitHandler(payload, options);
     },
     listFeedback: async (options) => {
       listCalls.push(options);
@@ -312,4 +312,42 @@ test('authenticated feedback content is escaped and private issue links disappea
   app.click('logout');
   assert.ok(!app.html.includes(sampleItem.url));
   assert.ok(!app.html.includes('onerror'));
+});
+
+test('feedback shows actual connection progress and preserves the draft on connection timeout', async () => {
+  const app = createFeedbackUI();
+  const pending = deferred();
+  app.onSubmit((_payload, { onStatus }) => {
+    onStatus({ phase: 'connecting', message: '正在连接服务，首次可能约一分钟。' });
+    return pending.promise;
+  });
+  app.ui.openFeedbackDialog();
+  app.input('等待服务启动期间保留的反馈。');
+  app.click('submit');
+  assert.equal(app.status, '正在连接服务，首次可能约一分钟。');
+  assert.equal(app.submitButton.disabled, true);
+  pending.reject(new feedbackClient.FeedbackError('CONNECTION_TIMEOUT', '连接服务超时，请保留当前内容后重试。', { retryable: true }));
+  await app.flush();
+  assert.equal(app.textarea.value, '等待服务启动期间保留的反馈。');
+  assert.match(app.status, /连接服务超时/);
+  assert.equal(app.submitButton.disabled, false);
+});
+
+test('admin list connection progress cannot reappear after logout', async () => {
+  const app = createFeedbackUI({ storedToken: 'feedback-admin-only' });
+  const pending = deferred();
+  let reportStatus;
+  app.onList(({ onStatus }) => {
+    reportStatus = onStatus;
+    onStatus({ phase: 'connecting', message: '正在连接服务，首次可能约一分钟。' });
+    return pending.promise;
+  });
+  const loading = app.ui.ensureFeedbackLoaded();
+  assert.ok(app.html.includes('正在连接服务，首次可能约一分钟。'));
+  app.click('logout');
+  reportStatus({ phase: 'connecting', message: 'STALE CONNECTION STATUS' });
+  pending.resolve({ items: [sampleItem], hasMore: false, nextPage: null });
+  await loading;
+  assert.ok(!app.render().includes('STALE CONNECTION STATUS'));
+  assert.ok(!app.html.includes(sampleItem.content));
 });

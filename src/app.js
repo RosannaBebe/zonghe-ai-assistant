@@ -1,6 +1,7 @@
 import { createInitialState, sortParticipants, parseParticipantsCSV, participantsToCSV, generateAgenda, deriveMinutes, invalidateMeeting } from './domain.js';
 import { escapeHtml as esc, downloadFile, downloadDocx, createDocxBlob, createSeatMapSvg, openPrintSheet } from './exports.js';
 import { getDemoPlan, requestAgentPlan, validateModelToken } from './agent.js';
+import { waitForService } from './service-connection.js';
 import { renderFeedbackPage, initializeFeedbackUI, ensureFeedbackLoaded } from './feedback-ui.js';
 import { isMobile, renderMobileNav, enhanceMobileTables, renderMobileSeatList, openMaterialPreview, openSeatMapViewer, shareOrDownloadFile, installMobileEnhancements } from './mobile.js';
 
@@ -23,6 +24,7 @@ let section = ['agent', 'meeting', 'news', 'documents', 'knowledge', 'feedback']
 let tab = 'people', newsFilter = '全部', knowledgeFilter = '全部', search = '', mobileOpen = false;
 let toastTimer, run = null, busy = false;
 let agentGoalDraft = null;
+let modelConnectionStatus = '';
 let drawerReturnFocus = null;
 const sectionNames = { agent: '智能体工作台', meeting: '会务助手', news: '政务信息助手', documents: '公文助手', knowledge: '综合知识库', feedback: '反馈列表' };
 const checklistItems = ['确认会议时间与地点', '收集参会人员信息', '核对主客排序与座次', '准备会议材料与名签', '检查投屏及现场设备'];
@@ -89,6 +91,10 @@ function requireModelSettings(s = settings()) {
     throw error;
   }
 }
+function showModelConnectionStatus({ phase, message }) {
+  modelConnectionStatus = phase === 'connecting' ? message : '';
+  render();
+}
 function syncMobileDrawer() {
   const mobile = isMobile();
   if (!mobile) mobileOpen = false;
@@ -128,7 +134,7 @@ function go(next, nextTab) { section = next; if (nextTab) tab = nextTab; mobileO
 function render() {
   document.title = `${sectionNames[section]} · 知行`;
   const nav = (id, name, g, suffix = '') => `<button class="nav-item ${section === id ? 'active' : ''}" data-action="nav" data-section="${id}">${icon(g)}<span>${name}</span>${suffix}</button>`;
-  $('#app').innerHTML = `<div class="shell"><div class="mobile-overlay ${mobileOpen ? 'open' : ''}" data-action="mobile" aria-hidden="true"></div><aside id="mobile-more-drawer" class="sidebar ${mobileOpen ? 'mobile-open' : ''}" aria-label="更多功能"><button type="button" class="mobile-drawer-close" data-action="mobile" aria-label="关闭更多功能">${icon('close')}</button><div class="brand"><img src="./assets/logo.svg" alt="知行标志"><div><strong>知行</strong><small>综合管理 AI 智能助手</small></div></div><div class="nav-label">WORKSPACE</div>${nav('agent', '智能体工作台', 'spark')}<div class="nav-label" style="margin-top:13px">业务工具</div>${nav('meeting', '会务助手', 'calendar', '<small>核心</small>')}${nav('news', '政务信息助手', 'news')}${nav('documents', '公文助手', 'file')}${nav('knowledge', '综合知识库', 'book')}${nav('feedback', '反馈列表', 'message', '<small>临时</small>')}<div class="sidebar-bottom"><div class="nav-divider"></div><button class="nav-item" data-action="guide">${icon('play')}<span>参赛演示指南</span></button><button class="nav-item" data-action="settings">${icon('settings')}<span>模型与数据设置</span></button><div class="local-note"><span><i class="dot"></i>浏览器本地保存</span>演示数据 · 仅当前设备可见</div><div class="user"><div class="avatar">综</div><div><strong>综合管理部</strong><small>经营管理赛道 · 参赛演示</small></div></div></div></aside><main class="main"><header class="topbar"><button class="mobile-menu" data-action="mobile" aria-label="打开更多功能" aria-controls="mobile-more-drawer" aria-expanded="${mobileOpen}">${icon('menu')}<b>知行</b></button><div class="breadcrumbs">经营管理工作空间 ${icon('chevron')}<b>${sectionNames[section]}</b></div><div class="top-actions"><span class="top-date">${new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' })}</span><button class="mode-pill" data-action="settings">${icon('spark')}${modelSettingsLabel()}</button><button class="btn ghost small" data-action="guide">${icon('info')}使用指南</button></div></header><div class="page page-fade">${section === 'agent' ? renderAgent() : section === 'meeting' ? renderMeeting() : section === 'news' ? renderNews() : section === 'documents' ? renderDocuments() : section === 'feedback' ? renderFeedbackPage() : renderKnowledge()}<footer class="footnote"><span>${icon('shield')}所有预置人物与业务内容均为虚构演示。实际业务结果需人工审核。</span><span>知行 · 让经营管理更高效</span></footer></div><button type="button" class="feedback-entry" data-feedback-action="open" aria-haspopup="dialog">${icon('message')}<span>提交反馈</span></button></main>${renderMobileNav(section,mobileOpen)}</div>`;
+  $('#app').innerHTML = `<div class="shell"><div class="mobile-overlay ${mobileOpen ? 'open' : ''}" data-action="mobile" aria-hidden="true"></div><aside id="mobile-more-drawer" class="sidebar ${mobileOpen ? 'mobile-open' : ''}" aria-label="更多功能"><button type="button" class="mobile-drawer-close" data-action="mobile" aria-label="关闭更多功能">${icon('close')}</button><div class="brand"><img src="./assets/logo.svg" alt="知行标志"><div><strong>知行</strong><small>综合管理 AI 智能助手</small></div></div><div class="nav-label">WORKSPACE</div>${nav('agent', '智能体工作台', 'spark')}<div class="nav-label" style="margin-top:13px">业务工具</div>${nav('meeting', '会务助手', 'calendar', '<small>核心</small>')}${nav('news', '政务信息助手', 'news')}${nav('documents', '公文助手', 'file')}${nav('knowledge', '综合知识库', 'book')}${nav('feedback', '反馈列表', 'message', '<small>临时</small>')}<div class="sidebar-bottom"><div class="nav-divider"></div><button class="nav-item" data-action="guide">${icon('play')}<span>参赛演示指南</span></button><button class="nav-item" data-action="settings">${icon('settings')}<span>模型与数据设置</span></button><div class="local-note"><span><i class="dot"></i>浏览器本地保存</span>演示数据 · 仅当前设备可见</div><div class="user"><div class="avatar">综</div><div><strong>综合管理部</strong><small>经营管理赛道 · 参赛演示</small></div></div></div></aside><main class="main"><header class="topbar"><button class="mobile-menu" data-action="mobile" aria-label="打开更多功能" aria-controls="mobile-more-drawer" aria-expanded="${mobileOpen}">${icon('menu')}<b>知行</b></button><div class="breadcrumbs">经营管理工作空间 ${icon('chevron')}<b>${sectionNames[section]}</b></div><div class="top-actions"><span class="top-date">${new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' })}</span><button class="mode-pill" data-action="settings">${icon('spark')}${modelSettingsLabel()}</button><button class="btn ghost small" data-action="guide">${icon('info')}使用指南</button></div></header><div class="page page-fade">${modelConnectionStatus ? `<div class="notice blue" role="status" aria-live="polite">${icon('clock')}${esc(modelConnectionStatus)}</div>` : ''}${section === 'agent' ? renderAgent() : section === 'meeting' ? renderMeeting() : section === 'news' ? renderNews() : section === 'documents' ? renderDocuments() : section === 'feedback' ? renderFeedbackPage() : renderKnowledge()}<footer class="footnote"><span>${icon('shield')}所有预置人物与业务内容均为虚构演示。实际业务结果需人工审核。</span><span>知行 · 让经营管理更高效</span></footer></div><button type="button" class="feedback-entry" data-feedback-action="open" aria-haspopup="dialog">${icon('message')}<span>提交反馈</span></button></main>${renderMobileNav(section,mobileOpen)}</div>`;
   enhanceMobileTables(document);
   syncMobileDrawer();
   if(section==='feedback')void ensureFeedbackLoaded();
@@ -218,7 +224,9 @@ async function generateText(task,input) {
   const s=settings();
   if (!s.endpoint) return null;
   requireModelSettings(s);
-  const response = await fetch(s.endpoint,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${validateModelToken(s.token)}`},body:JSON.stringify({task,input,context:{meeting:state.meeting,template:state.doc.template}}),signal:AbortSignal.timeout(65000),credentials:'omit'});
+  const body=JSON.stringify({task,input,context:{meeting:state.meeting,template:state.doc.template}});
+  await waitForService(s.endpoint, { onStatus: showModelConnectionStatus, fetchImpl: fetch });
+  const response = await fetch(s.endpoint,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${validateModelToken(s.token)}`},body,signal:AbortSignal.timeout(65000),credentials:'omit'});
   let result; try {result=await response.json();}catch{throw new Error('模型服务没有返回有效 JSON，请检查服务端地址。');}
   if(!response.ok)throw new Error(result.error?.message||'模型请求失败，请检查服务端配置。');
   if(!result.text||result.mode!=='deepseek')throw new Error('模型结果格式不正确，未更新业务数据。');
@@ -256,7 +264,7 @@ async function startAgent() {
   busy=true;render();
   try{
     const planState=state,planRevision=state.meeting.revision;
-    const plan=s.endpoint?await requestAgentPlan(goal,state,s):getDemoPlan(goal,state);
+    const plan=s.endpoint?await requestAgentPlan(goal,state,{...s,onStatus:showModelConnectionStatus}):getDemoPlan(goal,state);
     if(state!==planState || planRevision!==state.meeting.revision)throw new Error('任务背景在规划期间已变化，请重新发起任务。');
     run={...plan,goal,steps:plan.steps.map(s=>({...s,status:'pending'})),startedAt,finishedAt:null,waiting:null,index:0};
     log(`发起智能体任务：${goal.slice(0,45)}`);save();

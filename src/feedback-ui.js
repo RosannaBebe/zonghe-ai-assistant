@@ -27,6 +27,7 @@ let submitting = false;
 let composing = false;
 let submissionError = '';
 let submissionSaved = false;
+let submissionConnectionStatus = '';
 let adminToken = '';
 let authenticated = false;
 let items = [];
@@ -35,6 +36,7 @@ let nextPage = null;
 let attemptedLoad = false;
 let loading = false;
 let listError = '';
+let listConnectionStatus = '';
 let listRequest = null;
 let listController = null;
 let listGeneration = 0;
@@ -92,7 +94,7 @@ export function renderFeedbackPage() {
   if (!adminToken) {
     return `${heading}<section class="feedback-panel feedback-admin-panel"><div class="feedback-intro"><h2>维护者查看</h2><p>反馈保存在私有 GitHub 仓库中，仅供项目维护者查看。提交反馈无需口令；查看记录需要独立的反馈管理口令。</p></div><form id="feedback-admin-form" class="feedback-form feedback-admin-form" data-feedback-form="admin" novalidate><label class="feedback-label" for="feedback-admin-token">反馈管理口令</label><input class="feedback-admin-input" id="feedback-admin-token" name="feedback-admin-token" type="password" autocomplete="off" spellcheck="false" aria-describedby="feedback-admin-hint" placeholder="输入反馈管理口令"><p class="feedback-hint" id="feedback-admin-hint">口令仅保存在当前浏览器会话，退出查看后清除。这与模型访问口令无关。</p>${listError ? `<p class="feedback-status is-error" role="alert">${esc(listError)}</p>` : ''}<div class="feedback-actions"><button type="submit" class="btn primary" data-feedback-action="login">查看反馈记录</button></div></form></section>`;
   }
-  return `${heading}<section class="feedback-panel"><div class="feedback-list-header"><div><h2>${authenticated ? '已收集的反馈' : '验证管理权限'}</h2><p>${authenticated ? `已加载 ${items.length} 条 · 提交时间为北京时间` : '验证成功后才显示私有反馈记录。'}</p></div><div class="feedback-list-controls"><button type="button" class="btn small" data-feedback-action="refresh" ${loading ? 'disabled' : ''}>刷新</button>${button('退出查看', 'logout', 'small')}</div></div>${listError ? `<p class="feedback-status is-error" role="alert">${esc(listError)}</p>` : ''}<div class="feedback-list" aria-busy="${loading}">${authenticated ? items.map(renderItem).join('') : ''}</div>${loading ? `<div class="feedback-loading" role="status" aria-live="polite">${spinner}${authenticated ? '正在加载反馈…' : '正在验证并读取反馈…'}</div>` : authenticated && !items.length ? `<div class="feedback-empty">${messageIcon}<strong>暂时没有反馈</strong><p>收到的新建议会显示在这里。</p></div>` : !authenticated && !listError ? '<div class="feedback-empty"><p>正在准备读取反馈记录。</p></div>' : ''}${authenticated && hasMore ? `<div class="feedback-pagination"><button type="button" class="btn" data-feedback-action="more" ${loading ? 'disabled' : ''}>${loading ? '正在加载…' : '加载更多'}</button></div>` : authenticated && items.length && !loading ? '<div class="feedback-pagination"><p>已加载全部反馈</p></div>' : ''}</section>`;
+  return `${heading}<section class="feedback-panel"><div class="feedback-list-header"><div><h2>${authenticated ? '已收集的反馈' : '验证管理权限'}</h2><p>${authenticated ? `已加载 ${items.length} 条 · 提交时间为北京时间` : '验证成功后才显示私有反馈记录。'}</p></div><div class="feedback-list-controls"><button type="button" class="btn small" data-feedback-action="refresh" ${loading ? 'disabled' : ''}>刷新</button>${button('退出查看', 'logout', 'small')}</div></div>${listError ? `<p class="feedback-status is-error" role="alert">${esc(listError)}</p>` : ''}<div class="feedback-list" aria-busy="${loading}">${authenticated ? items.map(renderItem).join('') : ''}</div>${loading ? `<div class="feedback-loading" role="status" aria-live="polite">${spinner}${esc(listConnectionStatus || (authenticated ? '正在加载反馈…' : '正在验证并读取反馈…'))}</div>` : authenticated && !items.length ? `<div class="feedback-empty">${messageIcon}<strong>暂时没有反馈</strong><p>收到的新建议会显示在这里。</p></div>` : !authenticated && !listError ? '<div class="feedback-empty"><p>正在准备读取反馈记录。</p></div>' : ''}${authenticated && hasMore ? `<div class="feedback-pagination"><button type="button" class="btn" data-feedback-action="more" ${loading ? 'disabled' : ''}>${loading ? '正在加载…' : '加载更多'}</button></div>` : authenticated && items.length && !loading ? '<div class="feedback-pagination"><p>已加载全部反馈</p></div>' : ''}</section>`;
 }
 
 function updateDialog() {
@@ -111,7 +113,7 @@ function updateDialog() {
   submit.disabled = submitting || composing || !draft.trim() || over;
   submit.textContent = submitting ? '正在提交…' : pendingPayload && submissionError ? '重试提交' : '提交反馈';
   const message = over ? `已超出 ${count - FEEDBACK_MAX_LENGTH} 字，请精简至 ${FEEDBACK_MAX_LENGTH} 字以内后提交。`
-    : submissionError || (submitting ? '正在保存反馈，可以关闭窗口；提交结果会提示你。' : submissionSaved ? '反馈已保存，感谢你的建议。' : '');
+    : submissionError || (submitting ? submissionConnectionStatus || '正在保存反馈，可以关闭窗口；提交结果会提示你。' : submissionSaved ? '反馈已保存，感谢你的建议。' : '');
   status.textContent = message;
   status.className = `feedback-status ${over || submissionError ? 'is-error' : submissionSaved ? 'is-success' : 'is-info'}`;
   status.setAttribute('role', over || submissionError ? 'alert' : 'status');
@@ -184,9 +186,13 @@ async function sendDraft() {
   submitting = true;
   submissionError = '';
   submissionSaved = false;
+  submissionConnectionStatus = '';
   updateDialog();
   try {
-    const result = await submitFeedback(pendingPayload);
+    const result = await submitFeedback(pendingPayload, { onStatus: ({ phase, message }) => {
+      submissionConnectionStatus = phase === 'connecting' ? message : '';
+      updateDialog();
+    } });
     draft = '';
     pendingPayload = null;
     submissionSaved = true;
@@ -203,6 +209,7 @@ async function sendDraft() {
     if (!dialog?.open) callbacks.notify(submissionError);
   } finally {
     submitting = false;
+    submissionConnectionStatus = '';
     updateDialog();
   }
 }
@@ -220,6 +227,7 @@ function clearAdminSession() {
   loading = false;
   attemptedLoad = false;
   listError = '';
+  listConnectionStatus = '';
   storeToken('');
 }
 
@@ -235,10 +243,15 @@ function loadFeedback(reset = false) {
   loading = true;
   attemptedLoad = true;
   listError = '';
+  listConnectionStatus = '';
   refreshPage();
   listRequest = (async () => {
     try {
-      const result = await listFeedback({ page, token, signal: controller.signal });
+      const result = await listFeedback({ page, token, signal: controller.signal, onStatus: ({ phase, message }) => {
+        if (generation !== listGeneration || token !== adminToken) return;
+        listConnectionStatus = phase === 'connecting' ? message : '';
+        refreshPage();
+      } });
       if (generation !== listGeneration || token !== adminToken) return;
       items = reset ? result.items : [...new Map([...items, ...result.items].map((item) => [item.id, item])).values()];
       hasMore = result.hasMore;
@@ -253,6 +266,7 @@ function loadFeedback(reset = false) {
       // Logging out invalidates the request, so a late response cannot restore data.
       if (generation === listGeneration && token === adminToken) {
         loading = false;
+        listConnectionStatus = '';
         listController = null;
         listRequest = null;
         refreshPage();

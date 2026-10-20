@@ -1,0 +1,12 @@
+{
+  "name": "zhixing-cloud-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "知行备用 Node 后端，无第三方运行依赖",
+  "engines": { "node": ">=22.18.0" },
+  "scripts": {
+    "start": "node adapter.mjs",
+    "test": "node --test tests/*.test.mjs"
+  }
+}

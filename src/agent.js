@@ -1,3 +1,5 @@
+import { waitForService } from './service-connection.js';
+
 /**
  * The demo planner below is a local rules demonstration, not an AI model.
  * In connected mode the server asks DeepSeek to select tools; this module only
@@ -157,12 +159,24 @@ export async function requestAgentPlan(goal, state = {}, settings = {}) {
   const headers = { 'Content-Type': 'application/json' };
   const token = validateModelToken(settings.token);
   headers.Authorization = `Bearer ${token}`;
+  const body = JSON.stringify({ goal: text, context: basicContext(state) });
+  const fetchImpl = settings.fetchImpl || globalThis.fetch;
+  await waitForService(endpoint, {
+    signal: settings.signal, onStatus: settings.onStatus, fetchImpl,
+    timeoutMs: settings.connectionTimeoutMs,
+    pollIntervalMs: settings.connectionPollIntervalMs,
+    requestTimeoutMs: settings.connectionRequestTimeoutMs,
+  });
+  if (settings.signal?.aborted) throw new Error('模型请求已取消，请保留当前内容后重试。');
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let timedOut = false;
+  const cancel = () => controller.abort();
+  settings.signal?.addEventListener('abort', cancel, { once: true });
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(endpoint, {
+    const response = await fetchImpl(endpoint, {
       method: 'POST', headers, signal: controller.signal,
-      body: JSON.stringify({ goal: text, context: basicContext(state) }),
+      body,
     });
     let payload;
     try { payload = await response.json(); } catch { throw new Error('智能体服务返回格式无效，请检查服务端接口。'); }
@@ -181,10 +195,11 @@ export async function requestAgentPlan(goal, state = {}, settings = {}) {
     if (plan.mode !== 'deepseek') throw new Error('服务未返回真实模型计划，请检查智能体服务配置。');
     return plan;
   } catch (error) {
-    if (controller.signal.aborted || error?.name === 'AbortError') throw new Error('智能体规划超时，请稍后重试。');
+    if (controller.signal.aborted || error?.name === 'AbortError') throw new Error(timedOut ? '智能体规划超时，请保留当前内容后重试。' : '模型请求已取消，请保留当前内容后重试。');
     if (error instanceof TypeError) throw new Error('无法连接智能体转发服务，请检查地址、网络与服务端来源设置。');
     throw error;
   } finally {
     clearTimeout(timeout);
+    settings.signal?.removeEventListener('abort', cancel);
   }
 }
